@@ -6,9 +6,17 @@ import time
 import base64
 import socket
 import requests
-import numpy as np
-import cv2
 import qrcode
+try:
+    import numpy as np
+    import cv2
+except ImportError as _e:
+    # El servidor debe arrancar aunque falte OpenCV; el reconocimiento facial avisará el problema
+    np = None
+    cv2 = None
+    _ERROR_IMPORT_OPENCV = str(_e)
+else:
+    _ERROR_IMPORT_OPENCV = None
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request, make_response, send_from_directory
 
@@ -133,6 +141,8 @@ def registrar_log(uid, usuario, estado, detalle):
 # ---------------------------------------------------------------------------
 def cargar_modelos_rostro():
     global _detector, _reconocedor
+    if cv2 is None:
+        raise RuntimeError(f"Falta OpenCV en este Python ({_ERROR_IMPORT_OPENCV}). Instala: pip install opencv-python numpy")
     if _detector is not None and _reconocedor is not None:
         return
     if not (os.path.exists(ARCHIVO_YUNET) and os.path.exists(ARCHIVO_SFACE)):
@@ -142,6 +152,8 @@ def cargar_modelos_rostro():
 
 
 def decodificar_imagen(data_url):
+    if cv2 is None:
+        raise RuntimeError(f"Falta OpenCV en este Python ({_ERROR_IMPORT_OPENCV}). Instala: pip install opencv-python numpy")
     _, encoded = data_url.split(",", 1)
     buffer = np.frombuffer(base64.b64decode(encoded), dtype=np.uint8)
     return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
@@ -380,4 +392,10 @@ if __name__ == '__main__':
     protocolo = "https" if ssl_context else "http"
     url_terminal = f"{protocolo}://{ip_local}:5000/celular"
     mostrar_qr_servidor(url_terminal)
-    app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
+    try:
+        app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
+    except Exception as e:
+        # Si HTTPS falla (por ejemplo, certificado no creable), se sirve por HTTP para no dejar el sistema sin web
+        print(f"⚠️ HTTPS no disponible ({e}). Sirviendo por HTTP.")
+        mostrar_qr_servidor(f"http://{ip_local}:5000/celular")
+        app.run(host='0.0.0.0', port=5000, debug=False)

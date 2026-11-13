@@ -48,7 +48,11 @@ def iniciar_servidor_web_automatico():
     if os.path.exists(script_web):
         try:
             python_exe = sys.executable.replace("pythonw.exe", "python.exe")
-            subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Los errores del servidor web se guardan en web_app.log para poder diagnosticarlos
+            log_web = open(os.path.join(RUTA_BASE, "web_app.log"), "a", encoding="utf-8")
+            log_web.write(f"\n--- Arranque {datetime.now()} ---\n")
+            log_web.flush()
+            subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT)
         except Exception:
             pass
 
