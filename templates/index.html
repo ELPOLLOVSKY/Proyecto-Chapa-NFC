@@ -9,7 +9,7 @@
 <body class="bg-dark text-light">
     <div class="container py-4">
         <header class="pb-3 mb-4 border-bottom d-flex align-items-center justify-content-between">
-            <h2>🚪 Monitor de Accesos NFC (Traductor Visual)</h2>
+            <h2>🚪 Monitor de Accesos NFC (Traductor Visual) <span id="conexion" class="small text-secondary">● CONECTANDO</span></h2>
             <a href="/celular" target="_blank" class="btn btn-outline-info btn-sm">📱 Abrir Vista Celular</a>
         </header>
 
@@ -91,7 +91,11 @@
         }
 
         function refrescar() {
-            fetch('/api/estado', { cache: 'no-store' }).then(res => res.json()).then(data => {
+            fetch('/api/estado', { cache: 'no-store' }).then(res => res.json()).then(renderizar).catch(() => {});
+        }
+
+        function renderizar(data) {
+            {
                 const tbody = document.getElementById('tabla-logs');
                 tbody.innerHTML = data.logs.map(l => {
                     const color = l.estado === 'PERMITIDO' ? 'text-success fw-bold' : 'text-danger fw-bold';
@@ -108,7 +112,20 @@
                            `<td><img src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" class="rounded-circle" style="object-fit:cover" onerror="this.replaceWith('—')"></td>` +
                            `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
                 }).join('');
-            });
+            }
+        }
+
+        function conectarTiempoReal() {
+            const fuente = new EventSource('/api/stream');
+            fuente.onopen = () => marcarConexion(true);
+            fuente.onmessage = (ev) => { marcarConexion(true); renderizar(JSON.parse(ev.data)); };
+            fuente.onerror = () => marcarConexion(false);
+        }
+
+        function marcarConexion(activa) {
+            const el = document.getElementById('conexion');
+            el.innerText = activa ? '● EN VIVO' : '● SIN CONEXIÓN';
+            el.className = activa ? 'text-success small' : 'text-danger small';
         }
 
         function guardarUsuario() {
@@ -174,8 +191,9 @@
               .catch(() => mostrarMensaje('msg-debug', false, 'Error de conexión con el servidor'));
         }
 
-        setInterval(refrescar, 1500);
+        conectarTiempoReal();
         refrescar();
+        setInterval(refrescar, 3000); // respaldo por si la conexión en vivo se corta
     </script>
 </body>
 </html>

@@ -120,6 +120,7 @@
     <div class="header-terminal">
         <div id="reloj">00:00:00</div>
         <div id="fecha">Cargando...</div>
+        <div id="conexion" style="font-size: 0.75rem; color: #888;">● CONECTANDO</div>
     </div>
 
     <div class="terminal-screen">
@@ -199,8 +200,9 @@
         }
 
         async function activarCamaraManual() {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                avisoCamara = '⚠️ Cámara bloqueada: abre esta página con https://';
+            // En el celular, el navegador bloquea la cámara si la página no es HTTPS
+            if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                avisoCamara = '⚠️ Cámara bloqueada: abre la página con https:// y acepta el certificado';
                 return;
             }
             try {
@@ -257,9 +259,26 @@
                 .catch(err => console.error(err));
         }
 
+        // Tiempo real: el servidor empuja el estado cuando cambia (Server-Sent Events)
+        function marcarConexion(activa) {
+            const el = document.getElementById('conexion');
+            el.innerText = activa ? '● EN VIVO' : '● SIN CONEXIÓN';
+            el.style.color = activa ? '#00ff88' : '#f44336';
+        }
+
+        function conectarTiempoReal() {
+            const fuente = new EventSource('/api/stream');
+            fuente.onopen = () => marcarConexion(true);
+            fuente.onmessage = (ev) => {
+                marcarConexion(true);
+                renderizarEstado(JSON.parse(ev.data));
+            };
+            fuente.onerror = () => marcarConexion(false); // el navegador reintenta solo
+        }
+
         activarCamaraManual();
         setInterval(actualizarReloj, 1000);
-        setInterval(actualizarEstado, 500);
+        conectarTiempoReal();
         actualizarReloj();
         actualizarEstado();
     </script>

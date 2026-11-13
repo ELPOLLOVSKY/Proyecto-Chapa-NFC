@@ -1,4 +1,5 @@
 import os
+import sys
 import csv
 import json
 import math
@@ -7,18 +8,18 @@ import base64
 import socket
 import requests
 import qrcode
+from datetime import datetime
+from flask import Flask, render_template, jsonify, request, make_response, send_from_directory, Response
+
 try:
     import numpy as np
     import cv2
+    _ERROR_IMPORT_OPENCV = None
 except ImportError as _e:
     # El servidor debe arrancar aunque falte OpenCV; el reconocimiento facial avisará el problema
     np = None
     cv2 = None
     _ERROR_IMPORT_OPENCV = str(_e)
-else:
-    _ERROR_IMPORT_OPENCV = None
-from datetime import datetime
-from flask import Flask, render_template, jsonify, request, make_response, send_from_directory
 
 app = Flask(__name__)
 
@@ -31,11 +32,13 @@ CARPETA_MODELOS = os.path.join(BASE_DIR, "modelos")
 ARCHIVO_YUNET = os.path.join(CARPETA_MODELOS, "face_detection_yunet_2023mar.onnx")
 ARCHIVO_SFACE = os.path.join(CARPETA_MODELOS, "face_recognition_sface_2021dec.onnx")
 
+PUERTO = 5000
 URL_FIREBASE = "https://registros-acceso-nfc-default-rtdb.firebaseio.com"
 CAMPOS_LOG = ["fecha_hora", "timestamp", "uid", "usuario", "estado", "detalle"]
 COMANDOS_DEBUG = {"DBG_START", "DBG_CHAPA_ON", "DBG_CHAPA_OFF", "OK"}
 UMBRAL_SIMILITUD = 0.363  # Umbral de coseno recomendado por OpenCV para SFace
 SEGUNDOS_APERTURA = 3
+SEGUNDOS_ENVIO_ESTADO = 1.0  # Aunque no cambie nada, se reenvía el estado cada segundo (cuenta regresiva)
 
 os.makedirs(CARPETA_ROSTROS, exist_ok=True)
 
@@ -56,6 +59,11 @@ def obtener_ip_local():
         return ip
     except Exception:
         return "127.0.0.1"
+
+
+def puerto_ocupado(puerto=PUERTO):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", puerto)) == 0
 
 
 def mostrar_qr_servidor(url_acceso):
@@ -107,11 +115,14 @@ def sincronizar_firebase(metodo, ruta, cuerpo=None):
 
 
 def leer_logs():
+    """Lee el historial usando siempre los nombres de columna del servidor (no depende de la cabecera del archivo)."""
     logs = []
     if os.path.exists(ARCHIVO_CSV_LOGS):
         try:
             with open(ARCHIVO_CSV_LOGS, mode='r', encoding='utf-8', errors='ignore') as f:
-                for row in csv.DictReader(f):
+                for row in csv.DictReader(f, fieldnames=CAMPOS_LOG):
+                    if not row.get("timestamp") or row.get("fecha_hora") == "fecha_hora":
+                        continue  # fila vacía o cabecera repetida
                     logs.append(row)
         except Exception:
             pass
@@ -136,13 +147,31 @@ def registrar_log(uid, usuario, estado, detalle):
     sincronizar_firebase("POST", "/logs.json", fila)
 
 
+def encolar_comando(item):
+    """Deja un comando para el motor (Proyecto Chapa NFC.py), que lo envía al Arduino."""
+    cola = []
+    if os.path.exists(ARCHIVO_COLA_DEBUG):
+        try:
+            with open(ARCHIVO_COLA_DEBUG, 'r', encoding='utf-8') as f:
+                cola = json.load(f)
+        except Exception:
+            cola = []
+    cola.append(item)
+    with open(ARCHIVO_COLA_DEBUG, 'w', encoding='utf-8') as f:
+        json.dump(cola, f)
+
+
 # ---------------------------------------------------------------------------
 # Reconocimiento facial (OpenCV: YuNet para detectar, SFace para comparar)
 # ---------------------------------------------------------------------------
+def verificar_opencv():
+    if cv2 is None:
+        raise RuntimeError(f"Falta OpenCV en este Python ({_ERROR_IMPORT_OPENCV}). Instala: pip install -r requirements.txt")
+
+
 def cargar_modelos_rostro():
     global _detector, _reconocedor
-    if cv2 is None:
-        raise RuntimeError(f"Falta OpenCV en este Python ({_ERROR_IMPORT_OPENCV}). Instala: pip install opencv-python numpy")
+    verificar_opencv()
     if _detector is not None and _reconocedor is not None:
         return
     if not (os.path.exists(ARCHIVO_YUNET) and os.path.exists(ARCHIVO_SFACE)):
@@ -152,8 +181,7 @@ def cargar_modelos_rostro():
 
 
 def decodificar_imagen(data_url):
-    if cv2 is None:
-        raise RuntimeError(f"Falta OpenCV en este Python ({_ERROR_IMPORT_OPENCV}). Instala: pip install opencv-python numpy")
+    verificar_opencv()
     _, encoded = data_url.split(",", 1)
     buffer = np.frombuffer(base64.b64decode(encoded), dtype=np.uint8)
     return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
@@ -191,28 +219,9 @@ def similitud(rasgos_a, rasgos_b):
 
 
 # ---------------------------------------------------------------------------
-# Rutas: páginas
+# Estado (lo que ven el teléfono y el administrador)
 # ---------------------------------------------------------------------------
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-
-@app.route('/celular')
-def celular():
-    return render_template('celular.html')
-
-
-@app.route('/rostros_usuarios/<path:archivo>')
-def servir_rostro(archivo):
-    return send_from_directory(CARPETA_ROSTROS, archivo, max_age=0)
-
-
-# ---------------------------------------------------------------------------
-# Rutas: estado para el teléfono y el administrador
-# ---------------------------------------------------------------------------
-@app.route('/api/estado')
-def api_estado():
+def calcular_estado():
     usuarios = cargar_usuarios_locales()
     logs = leer_logs()
     ahora = time.time()
@@ -241,16 +250,73 @@ def api_estado():
                 chapa_abierta = True
                 tiempo_restante = restante
 
-    payload = {
+    return {
         "usuarios": usuarios,
         "logs": logs[-15:][::-1],
         "ultimo": ultimo,
         "chapa_abierta": chapa_abierta,
         "tiempo_restante": tiempo_restante,
     }
-    response = make_response(jsonify(payload))
+
+
+def marca_de_archivo(ruta):
+    try:
+        st = os.stat(ruta)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def firma_datos():
+    """Cambia cuando cambian los registros o los usuarios (sirve para saber si hay novedades)."""
+    return (marca_de_archivo(ARCHIVO_CSV_LOGS), marca_de_archivo(ARCHIVO_JSON_USUARIOS))
+
+
+# ---------------------------------------------------------------------------
+# Rutas: páginas
+# ---------------------------------------------------------------------------
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/celular')
+def celular():
+    return render_template('celular.html')
+
+
+@app.route('/rostros_usuarios/<path:archivo>')
+def servir_rostro(archivo):
+    return send_from_directory(CARPETA_ROSTROS, archivo, max_age=0)
+
+
+# ---------------------------------------------------------------------------
+# Rutas: estado en tiempo real
+# ---------------------------------------------------------------------------
+@app.route('/api/estado')
+def api_estado():
+    response = make_response(jsonify(calcular_estado()))
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response
+
+
+@app.route('/api/stream')
+def api_stream():
+    """Server-Sent Events: el servidor empuja el estado cuando cambia y cada segundo (cuenta regresiva)."""
+    def generar():
+        ultima_firma = None
+        ultimo_envio = 0.0
+        while True:
+            firma = firma_datos()
+            ahora = time.time()
+            if firma != ultima_firma or ahora - ultimo_envio >= SEGUNDOS_ENVIO_ESTADO:
+                ultima_firma = firma
+                ultimo_envio = ahora
+                yield f"data: {json.dumps(calcular_estado(), ensure_ascii=False)}\n\n"
+            time.sleep(0.4)
+
+    return Response(generar(), mimetype='text/event-stream',
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +339,9 @@ def api_verificar_rostro():
             registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_DETECTADO")
             return jsonify({"success": False, "mensaje": "❌ No se detectó un rostro"})
 
+        usuarios = cargar_usuarios_locales()
         mejor_uid, mejor_similitud = None, -1.0
-        for uid in cargar_usuarios_locales():
+        for uid in usuarios:
             rasgos = rasgos_de_foto_usuario(uid)
             if rasgos is None:
                 continue
@@ -283,8 +350,11 @@ def api_verificar_rostro():
                 mejor_uid, mejor_similitud = uid, s
 
         if mejor_uid is not None and mejor_similitud >= UMBRAL_SIMILITUD:
-            nombre = nombre_de(cargar_usuarios_locales()[mejor_uid])
+            nombre = nombre_de(usuarios[mejor_uid])
             registrar_log(mejor_uid, nombre, "PERMITIDO", "RECONOCIMIENTO_FACIAL")
+            # Abrir la chapa: el motor recibe la orden y la envía al Arduino
+            encolar_comando({"cmd": "OK", "origen": "FACIAL", "uid": mejor_uid,
+                             "nombre": nombre, "ts": time.time()})
             return jsonify({"success": True, "mensaje": f"✅ Autorizado: {nombre}"})
 
         registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_RECONOCIDO")
@@ -361,26 +431,21 @@ def api_usuario_eliminar():
 
 @app.route('/api/debug', methods=['POST'])
 def api_debug():
-    """Deja el comando en una cola. El motor (Proyecto Chapa NFC.py) lo envía al Arduino."""
     data = request.get_json(silent=True) or {}
     cmd = (data.get('cmd') or '').strip().upper()
     if cmd not in COMANDOS_DEBUG:
         return jsonify({"success": False, "mensaje": "Comando no permitido"})
 
-    cola = []
-    if os.path.exists(ARCHIVO_COLA_DEBUG):
-        try:
-            with open(ARCHIVO_COLA_DEBUG, 'r', encoding='utf-8') as f:
-                cola = json.load(f)
-        except Exception:
-            cola = []
-    cola.append({"cmd": cmd, "ts": time.time()})
-    with open(ARCHIVO_COLA_DEBUG, 'w', encoding='utf-8') as f:
-        json.dump(cola, f)
+    encolar_comando({"cmd": cmd, "origen": "DEBUG", "ts": time.time()})
     return jsonify({"success": True, "mensaje": f"Comando {cmd} enviado al lector"})
 
 
 if __name__ == '__main__':
+    if puerto_ocupado(PUERTO):
+        print(f"⚠️ El puerto {PUERTO} ya está en uso: hay otro servidor web abierto.")
+        print("   Cierra la otra ventana o reinicia el equipo, y vuelve a iniciar el sistema.")
+        sys.exit(1)
+
     ip_local = obtener_ip_local()
     # La cámara del navegador en el celular solo funciona con HTTPS (o localhost).
     # Si está disponible 'cryptography', se usa un certificado temporal autofirmado.
@@ -390,12 +455,11 @@ if __name__ == '__main__':
     except ImportError:
         ssl_context = None
     protocolo = "https" if ssl_context else "http"
-    url_terminal = f"{protocolo}://{ip_local}:5000/celular"
-    mostrar_qr_servidor(url_terminal)
+    mostrar_qr_servidor(f"{protocolo}://{ip_local}:{PUERTO}/celular")
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False, ssl_context=ssl_context)
+        app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True, ssl_context=ssl_context)
     except Exception as e:
-        # Si HTTPS falla (por ejemplo, certificado no creable), se sirve por HTTP para no dejar el sistema sin web
+        # Si HTTPS falla, se sirve por HTTP para no dejar el sistema sin web
         print(f"⚠️ HTTPS no disponible ({e}). Sirviendo por HTTP.")
-        mostrar_qr_servidor(f"http://{ip_local}:5000/celular")
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        mostrar_qr_servidor(f"http://{ip_local}:{PUERTO}/celular")
+        app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True)

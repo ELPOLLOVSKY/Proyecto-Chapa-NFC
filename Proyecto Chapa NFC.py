@@ -267,12 +267,24 @@ def procesar_cola_debug(ser):
         return
     for item in cola:
         cmd = str(item.get("cmd", "")).upper()
-        if cmd in COMANDOS_DEBUG_PERMITIDOS:
-            try:
-                ser.write(f"{cmd}\n".encode('utf-8'))
-                ser.flush()
-            except (serial.SerialException, OSError):
-                return
+        if cmd not in COMANDOS_DEBUG_PERMITIDOS:
+            continue
+        try:
+            ser.write(f"{cmd}\n".encode('utf-8'))
+            ser.flush()
+        except (serial.SerialException, OSError):
+            return
+
+        # Acceso por reconocimiento facial: el motor muestra y anuncia la persona, y cuenta la apertura
+        if item.get("origen") == "FACIAL":
+            nombre = str(item.get("nombre", "Usuario"))
+            uid = str(item.get("uid", ""))
+            fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            imprimir_encabezado_escucha()
+            print(f"[{fecha}] 🔓 AUTORIZADO POR ROSTRO -> Usuario: {nombre} | UID: {uid}")
+            hablar(f"Acceso autorizado. Bienvenido {nombre}.")
+            ejecutar_cuenta_regresiva_chapa(3)
+            imprimir_encabezado_escucha()
 
 def capturar_tecla_instantanea():
     if msvcrt.kbhit():
@@ -592,6 +604,12 @@ def eliminar_usuario_con_confirmacion(ser):
         if confirmar == 's':
             del usuarios_dict[uid_a_eliminar]
             guardar_usuarios_locales(usuarios_dict)
+            foto = os.path.join(RUTA_BASE, "rostros_usuarios", f"{uid_a_eliminar}.jpg")
+            if os.path.exists(foto):
+                try:
+                    os.remove(foto)
+                except OSError:
+                    pass
             if online:
                 try:
                     requests.delete(f"{URL_BASE}/usuarios/{uid_a_eliminar}.json", timeout=3)

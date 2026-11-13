@@ -1,0 +1,12 @@
+# Servidor web (app.py)
+flask
+qrcode
+requests
+numpy
+opencv-python
+cryptography
+
+# Motor del lector (Proyecto Chapa NFC.py)
+pyserial
+pyttsx3
+pywin32
