@@ -6,6 +6,7 @@ import math
 import time
 import base64
 import socket
+import threading
 import requests
 import qrcode
 from datetime import datetime
@@ -440,26 +441,45 @@ def api_debug():
     return jsonify({"success": True, "mensaje": f"Comando {cmd} enviado al lector"})
 
 
+PUERTO_HTTPS = 5443  # Para el celular (la cámara exige HTTPS fuera de localhost)
+
+
+def iniciar_http_local(ip_local):
+    """Computadora: HTTP en el puerto 5000. 'localhost' es origen seguro, así que la cámara funciona igual."""
+    print(f"💻 Administrador en la computadora: http://127.0.0.1:{PUERTO}/")
+    app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True)
+
+
 if __name__ == '__main__':
-    if puerto_ocupado(PUERTO):
-        print(f"⚠️ El puerto {PUERTO} ya está en uso: hay otro servidor web abierto.")
-        print("   Cierra la otra ventana o reinicia el equipo, y vuelve a iniciar el sistema.")
-        sys.exit(1)
+    for p in (PUERTO, PUERTO_HTTPS):
+        if puerto_ocupado(p):
+            print(f"⚠️ El puerto {p} ya está en uso: hay otro servidor web abierto.")
+            print("   Cierra la otra ventana o reinicia el equipo, y vuelve a iniciar el sistema.")
+            sys.exit(1)
 
     ip_local = obtener_ip_local()
-    # La cámara del navegador en el celular solo funciona con HTTPS (o localhost).
-    # Si está disponible 'cryptography', se usa un certificado temporal autofirmado.
     try:
         import cryptography  # noqa: F401
-        ssl_context = 'adhoc'
+        tiene_https = True
     except ImportError:
-        ssl_context = None
-    protocolo = "https" if ssl_context else "http"
-    mostrar_qr_servidor(f"{protocolo}://{ip_local}:{PUERTO}/celular")
-    try:
-        app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True, ssl_context=ssl_context)
-    except Exception as e:
-        # Si HTTPS falla, se sirve por HTTP para no dejar el sistema sin web
-        print(f"⚠️ HTTPS no disponible ({e}). Sirviendo por HTTP.")
+        tiene_https = False
+
+    if tiene_https:
+        # Celular: HTTPS con certificado temporal autofirmado (el navegador pedirá aceptarlo una vez)
+        mostrar_qr_servidor(f"https://{ip_local}:{PUERTO_HTTPS}/celular")
+    else:
+        print("⚠️ Falta 'cryptography': el celular no podrá usar la cámara. Instala requirements.txt.")
         mostrar_qr_servidor(f"http://{ip_local}:{PUERTO}/celular")
-        app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True)
+
+    # HTTP en segundo plano para la computadora
+    hilo_http = threading.Thread(target=iniciar_http_local, args=(ip_local,), daemon=True)
+    hilo_http.start()
+
+    if tiene_https:
+        try:
+            app.run(host='0.0.0.0', port=PUERTO_HTTPS, debug=False, threaded=True, ssl_context='adhoc')
+        except Exception as e:
+            print(f"⚠️ HTTPS no disponible en el puerto {PUERTO_HTTPS} ({e}). El administrador sigue funcionando en http://127.0.0.1:{PUERTO}/")
+            hilo_http.join()
+    else:
+        hilo_http.join()
