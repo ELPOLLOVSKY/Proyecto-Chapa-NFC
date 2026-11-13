@@ -172,6 +172,10 @@ def encolar_comando(item):
                 cola = json.load(f)
         except Exception:
             cola = []
+    # Un mismo rostro no se encola dos veces mientras su acceso está pendiente
+    if item.get("origen") == "FACIAL" and any(
+            c.get("origen") == "FACIAL" and c.get("uid") == item.get("uid") for c in cola):
+        return
     cola.append(item)
     with open(ARCHIVO_COLA_DEBUG, 'w', encoding='utf-8') as f:
         json.dump(cola, f)

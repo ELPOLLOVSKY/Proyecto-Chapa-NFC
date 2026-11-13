@@ -284,7 +284,19 @@ def procesar_cola_debug(ser):
         os.remove(en_proceso)
     except Exception:
         return
-    for item in cola:
+    # Solo se ejecuta lo reciente: un acceso facial de hace más de 4 s o un comando de prueba
+    # de hace más de 10 s ya no corresponde. Entre varios accesos faciales, solo el más nuevo.
+    ahora = time.time()
+    def vigente(item):
+        limite = 4 if item.get("origen") == "FACIAL" else 10
+        return ahora - float(item.get("ts", 0)) <= limite
+    vigentes = [i for i in cola if vigente(i)]
+    faciales = [i for i in vigentes if i.get("origen") == "FACIAL"]
+    otros = [i for i in vigentes if i.get("origen") != "FACIAL"]
+    if faciales:
+        otros.append(max(faciales, key=lambda i: float(i.get("ts", 0))))
+
+    for item in otros:
         cmd = str(item.get("cmd", "")).upper()
         if cmd not in COMANDOS_DEBUG_PERMITIDOS:
             continue
@@ -303,6 +315,11 @@ def procesar_cola_debug(ser):
             print(f"[{fecha}] 🔓 AUTORIZADO POR ROSTRO -> Usuario: {nombre} | UID: {uid}")
             hablar(f"Acceso autorizado. Bienvenido {nombre}.")
             ejecutar_cuenta_regresiva_chapa(3)
+            # Lo que se leyó mientras tanto (tarjetas apoyadas, etc.) ya no corresponde: se descarta
+            try:
+                ser.reset_input_buffer()
+            except (serial.SerialException, OSError):
+                pass
             imprimir_encabezado_escucha()
 
 def capturar_tecla_instantanea():

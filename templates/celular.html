@@ -217,7 +217,7 @@
 
             if (reciente && u.estado === 'PERMITIDO') {
                 const puerta = data.chapa_abierta ? `PUERTA ABIERTA · ${data.tiempo_restante}s` : '';
-                mostrarAcceso('acceso-ok', '🔓 ACCESO AUTORIZADO', 'Bienvenido', u, puerta);
+                mostrarAcceso('acceso-ok', '🔓 ¡BIENVENIDO!', '', u, puerta);
                 pausaHasta = Math.max(pausaHasta, Date.now() + 1000);
             } else if (reciente) {
                 const motivo = MOTIVOS[u.detalle] || 'DENEGADO';
