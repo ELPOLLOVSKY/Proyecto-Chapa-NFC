@@ -4,8 +4,8 @@
 #define SS_PIN 10
 #define RST_PIN 9
 
-#define PIN_SENAL_CHAPA 6       // Pin 6 manda la señal al conversor/chapa
-#define PIN_LED_PLACA LED_BUILTIN  // Pin 13 (LED 'L' del Arduino)
+#define PIN_SENAL_CHAPA 4        // Pin 4 para la chapa (Active Low)[cite: 1]
+#define PIN_LED_PLACA LED_BUILTIN 
 
 MFRC522 rfid(SS_PIN, RST_PIN);
 
@@ -14,19 +14,19 @@ unsigned long ultimoTiempoDebug = 0;
 bool estadoLedDebug = false;
 
 void setup() {
+  // Blindaje Active Low al encender
+  digitalWrite(PIN_SENAL_CHAPA, HIGH); 
+  pinMode(PIN_SENAL_CHAPA, OUTPUT);
+  
+  pinMode(PIN_LED_PLACA, OUTPUT);
+  digitalWrite(PIN_LED_PLACA, HIGH);
+
   Serial.begin(9600);
   SPI.begin();
   rfid.PCD_Init();
-
-  pinMode(PIN_SENAL_CHAPA, OUTPUT);
-  pinMode(PIN_LED_PLACA, OUTPUT);
-
-  digitalWrite(PIN_SENAL_CHAPA, LOW);
-  digitalWrite(PIN_LED_PLACA, HIGH); // LED 'L' encendido fijo en reposo
 }
 
 void loop() {
-  // 1. Parpadeo de 2s / 2s en Modo Debug
   if (modoDebugActivo) {
     if (millis() - ultimoTiempoDebug >= 2000) {
       ultimoTiempoDebug = millis();
@@ -35,28 +35,29 @@ void loop() {
     }
   }
 
-  // 2. Comandos Serial desde Python
   if (Serial.available() > 0) {
     String respuesta = Serial.readStringUntil('\n');
     respuesta.trim();
 
-    // ACCESO AUTORIZADO (OK): PULSOS ANTI-TRABADO DURANTE 6 SEGUNDOS
     if (respuesta == "OK") {
       modoDebugActivo = false;
       digitalWrite(PIN_LED_PLACA, HIGH);
 
-      // Ejecuta 6 ciclos de 1 segundo (Golpe fuerte + Micro-corte de liberación)
+      // Temporizador de apertura (Pulsos anti-trabado)
       for (int i = 0; i < 6; i++) {
-        digitalWrite(PIN_SENAL_CHAPA, HIGH); // Da corriente de golpe
-        delay(850);                          // Mantiene la fuerza 0.85 seg
-        digitalWrite(PIN_SENAL_CHAPA, LOW);  // Corta un instante para liberar tensión
-        delay(150);                          // 0.15 seg de corte
+        digitalWrite(PIN_SENAL_CHAPA, LOW);   
+        delay(850);                           
+        digitalWrite(PIN_SENAL_CHAPA, HIGH);  
+        delay(150);                           
       }
 
-      digitalWrite(PIN_SENAL_CHAPA, LOW);
-      digitalWrite(PIN_LED_PLACA, HIGH);    // Mantiene LED fijo encendido
+      digitalWrite(PIN_SENAL_CHAPA, HIGH);    
+      digitalWrite(PIN_LED_PLACA, HIGH);    
+      
+      // AVISO A PYTHON DE QUE TERMINÓ LA ACCIÓN PARA REINICIAR CONEXIÓN
+      Serial.println("RESET_CONEXION");
+      Serial.flush(); // Limpieza de búfer serial para evitar bloqueos
     } 
-    // ACCESO DENEGADO (ERR)
     else if (respuesta == "ERR") {
       modoDebugActivo = false;
       for (int i = 0; i < 6; i++) {
@@ -67,8 +68,6 @@ void loop() {
       }
       digitalWrite(PIN_LED_PLACA, HIGH);
     }
-    
-    // COMANDOS DE DEBUG
     else if (respuesta == "DBG_START") {
       modoDebugActivo = true;
       ultimoTiempoDebug = millis();
@@ -77,22 +76,16 @@ void loop() {
     }
     else if (respuesta == "DBG_CHAPA_ON") {
       modoDebugActivo = false;
+      digitalWrite(PIN_SENAL_CHAPA, LOW);
+      digitalWrite(PIN_LED_PLACA, HIGH);
+    }
+    else if (respuesta == "DBG_CHAPA_OFF" || respuesta == "DBG_RESET") {
+      modoDebugActivo = false;
       digitalWrite(PIN_SENAL_CHAPA, HIGH);
-      digitalWrite(PIN_LED_PLACA, HIGH);
-    }
-    else if (respuesta == "DBG_CHAPA_OFF") {
-      modoDebugActivo = false;
-      digitalWrite(PIN_SENAL_CHAPA, LOW);
-      digitalWrite(PIN_LED_PLACA, HIGH);
-    }
-    else if (respuesta == "DBG_RESET") {
-      modoDebugActivo = false;
-      digitalWrite(PIN_SENAL_CHAPA, LOW);
       digitalWrite(PIN_LED_PLACA, HIGH);
     }
   }
 
-  // 3. Lectura RFID
   if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
     String uidCadena = "";
     for (byte i = 0; i < rfid.uid.size; i++) {
@@ -102,6 +95,7 @@ void loop() {
     uidCadena.toUpperCase();
 
     Serial.println("CARD:" + uidCadena);
+    Serial.flush(); // Asegura el envío limpio del UID para que no se pegue el puerto
 
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();

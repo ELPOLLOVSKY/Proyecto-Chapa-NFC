@@ -1,4 +1,5 @@
 import serial
+import serial.tools.list_ports
 import time
 from datetime import datetime
 import os
@@ -9,22 +10,63 @@ import pyttsx3
 import requests
 import subprocess
 import sys
+import threading
 
 # =========================================================================
 # CONFIGURACIÓN DE FIREBASE Y ARCHIVOS LOCALES
 # =========================================================================
-PUERTO_COM = 'COM24'
+PUERTO_COM_ACTUAL = "DESCONOCIDO"
 BAUD_RATE = 9600
 TECLA_MENU_OCULTO = 'm'
 
 URL_BASE = 'https://registros-acceso-nfc-default-rtdb.firebaseio.com'
-ARCHIVO_CSV_LOGS = "registros_locales.csv"
-ARCHIVO_JSON_USUARIOS = "usuarios_locales.json"
+
+def obtener_ruta_base():
+    """Detecta la carpeta raíz real donde se ejecuta el script para asegurar portabilidad."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+RUTA_BASE = obtener_ruta_base()
+ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
+ARCHIVO_JSON_USUARIOS = os.path.join(RUTA_BASE, "usuarios_locales.json")
 
 # Variables globales de contadores
 cant_permitidos = 0
 cant_denegados = 0
 porcentaje_actual_carga = 0
+
+# =========================================================================
+# AUTO-ARRANQUE DEL SERVIDOR WEB EN SEGUNDO PLANO (HILO AUTOMÁTICO)
+# =========================================================================
+def iniciar_servidor_web_automatico():
+    """Lanza el servidor app.py automáticamente en segundo plano al iniciar el motor."""
+    script_web = os.path.join(RUTA_BASE, "app.py")
+    if os.path.exists(script_web):
+        try:
+            python_exe = sys.executable.replace("pythonw.exe", "python.exe")
+            subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+# =========================================================================
+# AUTO-DETECCIÓN INTELIGENTE DE PUERTO COM SERIE
+# =========================================================================
+def autodetectar_puerto_arduino():
+    """Escanea los puertos COM activos e identifica la placa Arduino automáticamente."""
+    puertos = list(serial.tools.list_ports.comports())
+    if not puertos:
+        return None
+
+    palabras_clave = ["arduino", "ch340", "ftdi", "usb-serial", "usb serial", "cp210x"]
+    for p in puertos:
+        desc = p.description.lower()
+        hwid = p.hwid.lower()
+        if any(clave in desc or clave in hwid for clave in palabras_clave):
+            return p.device
+
+    return puertos[0].device
 
 # =========================================================================
 # SÍNTESIS DE VOZ Y BARRA DE CARGA FLUIDA EN CONSOLA
@@ -45,7 +87,6 @@ def limpiar_pantalla():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def renderizar_barra_grafica(porcentaje, texto_estado):
-    """Dibuja la barra en pantalla de forma estética y centrada."""
     limpiar_pantalla()
     ancho_barra = 30
     llenos = int(ancho_barra * porcentaje // 100)
@@ -63,7 +104,6 @@ def renderizar_barra_grafica(porcentaje, texto_estado):
     print("=========================================================".center(60))
 
 def animar_carga_hasta(porcentaje_destino, texto_estado, pasitos=5, demora=0.015):
-    """Incrementa la barra paso a paso para que la transición sea totalmente fluida."""
     global porcentaje_actual_carga
     if porcentaje_destino < porcentaje_actual_carga:
         porcentaje_actual_carga = porcentaje_destino
@@ -86,7 +126,6 @@ def animar_carga_hasta(porcentaje_destino, texto_estado, pasitos=5, demora=0.015
     renderizar_barra_grafica(porcentaje_destino, texto_estado)
 
 def precargar_estadisticas_iniciales():
-    """Calcula los contadores acumulados de permitidos y denegados desde Firebase o el CSV local."""
     global cant_permitidos, cant_denegados
     cant_permitidos = 0
     cant_denegados = 0
@@ -168,7 +207,6 @@ def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
         "detalle": detalle
     }
     
-    # 1. Registro Local
     existe_archivo = os.path.exists(ARCHIVO_CSV_LOGS)
     try:
         with open(ARCHIVO_CSV_LOGS, mode='a', newline='', encoding='utf-8') as file:
@@ -179,7 +217,6 @@ def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
     except Exception as e:
         print(f"⚠️ Error al guardar en CSV local: {e}")
 
-    # 2. Registro en la Nube
     try:
         requests.post(f"{URL_BASE}/logs.json", json=log_data, timeout=2.5)
     except Exception:
@@ -193,7 +230,7 @@ def imprimir_encabezado_escucha():
     print("=========================================================")
     print("  CONTROL ACCESO NFC (GOOGLE FIREBASE + RESPALDO LOCAL 📁)")
     print("=========================================================")
-    print(f" Status: MONITOREANDO LECTURAS EN TIEMPO REAL [{PUERTO_COM}]")
+    print(f" Status: MONITOREANDO LECTURAS EN TIEMPO REAL [{PUERTO_COM_ACTUAL}]")
     print("---------------------------------------------------------")
     print(f" 📊 CONTADOR ACUMULADO:")
     print(f"    • Total Lecturas : {total_accesos}")
@@ -203,9 +240,9 @@ def imprimir_encabezado_escucha():
     print(f" Tip: Presiona la tecla '{TECLA_MENU_OCULTO.upper()}' para entrar al MENÚ PRINCIPAL")
     print("=========================================================\n")
 
-def ejecutar_cuenta_regresiva_chapa(segundos=6):
+def ejecutar_cuenta_regresiva_chapa(segundos=3):  # <--- AJUSTADO A 3 SEGUNDOS
     for restante in range(segundos, 0, -1):
-        print(f"\r⚡ [PULSOS DE CHAPA ACTIVOS (Pin 6)] -> Bloqueando en: {restante} seg... ", end="", flush=True)
+        print(f"\r⚡ [PULSOS DE CHAPA ACTIVOS] -> Bloqueando en: {restante} seg... ", end="", flush=True)
         time.sleep(1)
     print("\r🔒 [CHAPA DESACTIVADA] Estado normal restablecido.                    \n")
 
@@ -217,25 +254,7 @@ def capturar_tecla_instantanea():
 def esperar_tecla_instantanea():
     return msvcrt.getch().decode('utf-8', errors='ignore').lower()
 
-def leer_tarjeta_timeout(ser, timeout_seg=10):
-    inicio = time.time()
-    try:
-        ser.reset_input_buffer()
-        while time.time() - inicio < timeout_seg:
-            if ser.in_waiting > 0:
-                linea = ser.readline().decode('utf-8', errors='ignore').strip()
-                if linea.startswith("CARD:"):
-                    return linea.split(":")[1].upper()
-            time.sleep(0.05)
-    except (serial.SerialException, serial.SerialTimeoutException, OSError):
-        return None
-    return None
-
 def capturar_entrada_hibrida(ser, prompt_texto="Opción / Búsqueda / Tarjeta: "):
-    """
-    Permite escribir por teclado O acercar la tarjeta NFC al mismo tiempo.
-    Retorna la cadena ingresada o la trama 'NFC:UID' leída por serial.
-    """
     print(prompt_texto, end="", flush=True)
     buffer_teclado = ""
     try:
@@ -259,7 +278,7 @@ def capturar_entrada_hibrida(ser, prompt_texto="Opción / Búsqueda / Tarjeta: "
             if ch in [b'\r', b'\n']:
                 print()
                 return buffer_teclado.strip()
-            elif ch == b'\x08': # Backspace
+            elif ch == b'\x08':
                 if len(buffer_teclado) > 0:
                     buffer_teclado = buffer_teclado[:-1]
                     print("\b \b", end="", flush=True)
@@ -279,28 +298,21 @@ def lanzar_script_analytics_cascada():
     print("  INICIANDO SCRIPT DE ANALÍTICA EN CASCADA 🚀    ")
     print("==================================================")
     
-    directorio_actual = os.path.dirname(os.path.abspath(__file__))
-    script_path = os.path.join(directorio_actual, "generar_analytics_firebase.py")
+    script_path = os.path.join(RUTA_BASE, "generar_analytics_firebase.py")
     python_exe = sys.executable.replace("pythonw.exe", "python.exe")
     
     print(f"🔍 Buscando script en: {script_path}\n")
 
     if not os.path.exists(script_path):
-        print(f"❌ Error: No se encontró el archivo 'generar_analytics_firebase.py'")
-        print(f"Asegúrate de que ambos archivos estén en la misma carpeta:")
-        print(f"  👉 {directorio_actual}")
+        print(f"❌ Error: No se encontró 'generar_analytics_firebase.py'")
         input("\nPresiona ENTER para volver al menú...")
         return
 
     try:
         if os.name == 'nt':
-            subprocess.Popen(
-                [python_exe, script_path],
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=directorio_actual
-            )
+            subprocess.Popen([python_exe, script_path], creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=RUTA_BASE)
         else:
-            subprocess.Popen([python_exe, script_path], cwd=directorio_actual)
+            subprocess.Popen([python_exe, script_path], cwd=RUTA_BASE)
             
         print("✅ ¡Ventana de analítica lanzada con éxito!")
     except Exception as e:
@@ -314,6 +326,7 @@ def lanzar_script_analytics_cascada():
 def submenu_debug(ser):
     try:
         ser.write(b"DBG_START\n")
+        ser.flush()
     except (serial.SerialException, OSError):
         return
 
@@ -327,7 +340,7 @@ def submenu_debug(ser):
         print(" [1] DAR CORRIENTE CONTINUA A CHAPA  (Pin 6 en HIGH Fijo)")
         print(" [2] CORTAR CORRIENTE DE LA CHAPA    (Pin 6 en LOW / Paro)")
         print(" [3] Reanudar parpadeo 2s/2s del LED 'L'")
-        print(" [4] Test de pulso de apertura (6 seg con cuenta regresiva)")
+        print(" [4] Test de pulso de apertura (3 seg con cuenta regresiva)")
         print(" [0] VOLVER AL MENÚ PRINCIPAL        (Corta Pin 6 / LED Fijo)")
         print("==========================================================")
         
@@ -336,24 +349,29 @@ def submenu_debug(ser):
         try:
             if tecla == '1':
                 ser.write(b"DBG_CHAPA_ON\n")
-                print("\n⚡ [CORRIENTE ACTIVADA] Mandando 5V CONTINUOS al Pin 6...")
+                ser.flush()
+                print("\n⚡ [CORRIENTE ACTIVADA] Mandando 5V CONTINUOS...")
                 print("--> Presiona [2] para CORTAR la corriente.")
                 time.sleep(1.2)
             elif tecla == '2':
                 ser.write(b"DBG_CHAPA_OFF\n")
-                print("\n⛔ [CORRIENTE CORTADA] Pin 6 en 0V. Chapa desactivada.")
+                ser.flush()
+                print("\n⛔ [CORRIENTE CORTADA] Chapa desactivada.")
                 time.sleep(1)
             elif tecla == '3':
                 ser.write(b"DBG_START\n")
+                ser.flush()
                 print("\n🔄 Parpadeo lento (2s Prende / 2s Apaga) reanudado.")
                 time.sleep(1)
             elif tecla == '4':
                 ser.write(b"OK\n")
+                ser.flush()
                 print("\n")
-                ejecutar_cuenta_regresiva_chapa(6)
+                ejecutar_cuenta_regresiva_chapa(3)  # <--- AJUSTADO A 3 SEGUNDOS
                 time.sleep(0.5)
             elif tecla == '0':
                 ser.write(b"DBG_RESET\n")
+                ser.flush()
                 break
         except (serial.SerialException, OSError):
             print("\n❌ Error de comunicación serial en Debug. Reintentando...")
@@ -361,12 +379,10 @@ def submenu_debug(ser):
             break
 
 # =========================================================================
-# LÓGICA INTERACTIVA Y CONTINUA: AGREGAR / EDITAR USUARIOS
+# LÓGICA DE REGISTRO / EDICIÓN / CONSULTA / ELIMINACIÓN CON FILTRO
 # =========================================================================
 def agregar_o_editar_usuario(ser):
-    """Submenú interactivo y continuo para agregar nuevos usuarios o editar existentes."""
     filtro_actual = ""
-
     while True:
         limpiar_pantalla()
         print("==============================================")
@@ -398,23 +414,21 @@ def agregar_o_editar_usuario(ser):
 
         if entrada == '0' or not entrada:
             if filtro_actual:
-                filtro_actual = "" # Limpia el filtro actual
+                filtro_actual = ""
                 continue
             else:
-                break # Sale al submenú principal
+                break
 
         uid_seleccionado = None
         nombre_actual = ""
         es_edicion = False
 
-        # CASO 1: Lectura NFC Directa en tiempo real
         if entrada.startswith("NFC:"):
             uid_seleccionado = entrada.split(":")[1].upper()
             if uid_seleccionado in usuarios_dict:
                 nombre_actual = usuarios_dict[uid_seleccionado]
                 es_edicion = True
 
-        # CASO 2: Selección por Número Correlativo para Editar
         elif entrada.isdigit():
             num_opc = int(entrada)
             if 1 <= num_opc <= len(lista_usuarios):
@@ -425,18 +439,15 @@ def agregar_o_editar_usuario(ser):
                 time.sleep(1.5)
                 continue
 
-        # CASO 3: Selección por coincidencia exacta de UID escrito a mano
         elif entrada.upper() in usuarios_dict:
             uid_seleccionado = entrada.upper()
             nombre_actual = usuarios_dict[uid_seleccionado]
             es_edicion = True
 
-        # CASO 4: Es un nombre/texto -> Funciona SOLAMENTE como BUSCADOR / FILTRO
         else:
             filtro_actual = entrada
             continue
 
-        # PROCESO DE REGISTRO / EDICIÓN CON CONFIRMACIÓN
         print("\n----------------------------------------------")
         if es_edicion:
             print(f" ⚠️ [MODO EDICIÓN DETECTADO]")
@@ -454,42 +465,24 @@ def agregar_o_editar_usuario(ser):
             time.sleep(1.5)
             continue
 
-        print("\n----------------------------------------------")
-        print(f" CONFIRMACIÓN DE GUARDADO:")
-        print(f" • Operación : {'EDICIÓN DE NOMBRE' if es_edicion else 'NUEVO REGISTRO'}")
-        print(f" • Nombre    : {nombre_nuevo}")
-        print(f" • UID NFC   : {uid_seleccionado}")
-        print("----------------------------------------------")
-
-        confirmacion = input(f"¿Deseas guardar los cambios en el sistema? (s/n) + ENTER: ").strip().lower()
-
+        confirmacion = input(f"\n¿Guardar cambios? (s/n) + ENTER: ").strip().lower()
         if confirmacion == 's':
             usuarios_dict[uid_seleccionado] = nombre_nuevo
             guardar_usuarios_locales(usuarios_dict)
-            
             if online:
                 try:
                     requests.put(f"{URL_BASE}/usuarios/{uid_seleccionado}.json", json=nombre_nuevo, timeout=3)
-                    print(f"\n✅ [ÉXITO] Usuario '{nombre_nuevo}' guardado en la Nube y copia local.")
                 except Exception:
-                    print(f"\n⚠️ Guardado localmente. Se actualizará en la nube cuando vuelva el internet.")
-            else:
-                print(f"\n✅ [MODO OFFLINE] Usuario '{nombre_nuevo}' guardado en el archivo local.")
-                
+                    pass
             hablar(f"Usuario {nombre_nuevo} {'actualizado' if es_edicion else 'registrado'} con éxito.")
             filtro_actual = ""
             time.sleep(1.5)
         else:
-            print("\n❌ Operación cancelada. Permanece en el menú...")
+            print("\n❌ Operación cancelada.")
             time.sleep(1.2)
 
-# =========================================================================
-# LÓGICA INTERACTIVA Y CONTINUA: ELIMINAR USUARIOS
-# =========================================================================
 def eliminar_usuario_con_confirmacion(ser):
-    """Buscador y eliminador interactivo de usuarios con filtro por nombre y selección exclusiva por N° o NFC."""
     filtro_actual = ""
-    
     while True:
         limpiar_pantalla()
         print("==============================================")
@@ -504,7 +497,6 @@ def eliminar_usuario_con_confirmacion(ser):
 
         lista_usuarios = list(usuarios_dict.items())
 
-        # Renderizar la lista (filtrada o completa)
         print("Lista de usuarios registrados:\n")
         hay_coincidencias = False
         for idx, (uid, nombre) in enumerate(lista_usuarios, 1):
@@ -527,15 +519,14 @@ def eliminar_usuario_con_confirmacion(ser):
 
         if entrada == '0' or not entrada:
             if filtro_actual:
-                filtro_actual = "" # Si había filtro activo, el primer ENTER lo limpia
+                filtro_actual = ""
                 continue
             else:
-                break # Si no hay filtro, sale del menú
+                break
 
         uid_a_eliminar = None
         nombre_user = ""
 
-        # CASO 1: Selección Directa por Escaneo NFC
         if entrada.startswith("NFC:"):
             uid_escaneado = entrada.split(":")[1].upper()
             if uid_escaneado in usuarios_dict:
@@ -546,27 +537,23 @@ def eliminar_usuario_con_confirmacion(ser):
                 time.sleep(1.5)
                 continue
 
-        # CASO 2: Selección Directa por Número de Lista
         elif entrada.isdigit():
             num_opc = int(entrada)
             if 1 <= num_opc <= len(lista_usuarios):
                 uid_a_eliminar, nombre_user = lista_usuarios[num_opc - 1]
             else:
-                print(f"\n❌ El número '{num_opc}' no existe en la lista de usuarios.")
+                print(f"\n❌ El número '{num_opc}' no existe en la lista.")
                 time.sleep(1.5)
                 continue
 
-        # CASO 3: Selección por coincidencia exacta de UID escrito a mano
         elif entrada.upper() in usuarios_dict:
             uid_a_eliminar = entrada.upper()
             nombre_user = usuarios_dict[uid_a_eliminar]
 
-        # CASO 4: Es un nombre/texto -> Funciona SOLAMENTE como BUSCADOR / FILTRO
         else:
             filtro_actual = entrada
             continue
 
-        # FASE DE CONFIRMACIÓN (Solo si se seleccionó por N° exacto o Tarjeta NFC)
         print("\n----------------------------------------------")
         print(" 🔍 TARJETA SELECCIONADA PARA ELIMINAR:")
         print(f" • Nombre del Usuario : {nombre_user}")
@@ -577,25 +564,19 @@ def eliminar_usuario_con_confirmacion(ser):
         if confirmar == 's':
             del usuarios_dict[uid_a_eliminar]
             guardar_usuarios_locales(usuarios_dict)
-            
             if online:
                 try:
                     requests.delete(f"{URL_BASE}/usuarios/{uid_a_eliminar}.json", timeout=3)
-                    print(f"\n✅ Usuario '{nombre_user}' borrado de la Nube y copia local.")
                 except Exception:
-                    print(f"\n⚠️ Borrado localmente. Se sincronizará con la nube al reconectar.")
-            else:
-                print(f"\n✅ [MODO OFFLINE] Usuario '{nombre_user}' eliminado del archivo local.")
-                
+                    pass
             hablar(f"Usuario {nombre_user} eliminado del sistema.")
             filtro_actual = ""
             time.sleep(1.5)
         else:
-            print("\n❌ Operación cancelada. Permanece en el buscador...")
+            print("\n❌ Operación cancelada. Permanece en el menú...")
             time.sleep(1.2)
 
 def consultar_tarjeta_lector(ser):
-    """Bucle continuo de consulta de tarjetas. Permanece activo hasta presionar ENTER."""
     while True:
         limpiar_pantalla()
         print("==========================================================")
@@ -630,8 +611,6 @@ def consultar_tarjeta_lector(ser):
             pass
 
         if salida_manual:
-            print("\n🔙 Saliendo del modo consulta...")
-            time.sleep(0.5)
             break
 
         if not uid:
@@ -668,12 +647,10 @@ def consultar_tarjeta_lector(ser):
             time.sleep(0.05)
             
         if salida_manual:
-            print("\n🔙 Saliendo del modo consulta...")
-            time.sleep(0.5)
             break
 
 # =========================================================================
-# SUBMENÚ 1: REGISTRO Y GESTIÓN DE TARJETAS
+# MENÚS Y SUBMENÚS DE NAVEGACIÓN
 # =========================================================================
 def submenu_registro_tarjetas(ser):
     while True:
@@ -698,9 +675,6 @@ def submenu_registro_tarjetas(ser):
             break
         time.sleep(0.05)
 
-# =========================================================================
-# SUBMENÚ 2: HISTORIAL Y ANALÍTICA DE DATOS
-# =========================================================================
 def submenu_historial_datos(ser):
     while True:
         limpiar_pantalla()
@@ -764,9 +738,6 @@ def submenu_historial_datos(ser):
             break
         time.sleep(0.05)
 
-# =========================================================================
-# MENÚ PRINCIPAL ESTRUCTURADO EN SUBMENÚS
-# =========================================================================
 def menu_administrador(ser):
     while True:
         limpiar_pantalla()
@@ -780,7 +751,6 @@ def menu_administrador(ser):
         print("==============================================")
         
         opc = esperar_tecla_instantanea()
-
         if opc == '1':
             submenu_registro_tarjetas(ser)
         elif opc == '2':
@@ -789,28 +759,23 @@ def menu_administrador(ser):
             submenu_debug(ser)
         elif opc == '0':
             break
-
         time.sleep(0.05)
 
 # =========================================================================
-# BUCLE PRINCIPAL CON SECUENCIA DE ARRANQUE Y PRECARGA FLUIDA
+# BUCLE PRINCIPAL CON CONEXIÓN AUTODETECTABLE Y RECONEXIÓN DINÁMICA
 # =========================================================================
 def main():
-    global porcentaje_actual_carga
+    global porcentaje_actual_carga, PUERTO_COM_ACTUAL
     porcentaje_actual_carga = 0
     
-    # 1. Inicio suave
-    animar_carga_hasta(20, "Verificando puerto serie COM24 y dependencias...", pasitos=8, demora=0.01)
-    
-    # 2. Carga de estadísticas
+    # Lanza el servidor web automáticamente al arrancar
+    iniciar_servidor_web_automatico()
+
+    animar_carga_hasta(20, "Buscando placas Arduino en puertos COM disponibles...", pasitos=8, demora=0.01)
     animar_carga_hasta(45, "Precargando historial de accesos (Firebase / Local)...", pasitos=10, demora=0.01)
     precargar_estadisticas_iniciales()
-    
-    # 3. Descarga de usuarios
     animar_carga_hasta(75, "Descargando base de usuarios autorizados...", pasitos=10, demora=0.01)
     obtener_usuarios_hibrido()
-    
-    # 4. Motor de voz y finalización
     animar_carga_hasta(90, "Inicializando motor de voz sintetizada...", pasitos=6, demora=0.01)
     animar_carga_hasta(100, "¡Sistema cargado con éxito!", pasitos=5, demora=0.01)
     time.sleep(0.3)
@@ -818,58 +783,79 @@ def main():
     while True:
         ser = None
         while ser is None:
-            try:
-                ser = serial.Serial(PUERTO_COM, BAUD_RATE, timeout=0.1)
-                time.sleep(2)
-                ser.reset_input_buffer()
-                imprimir_encabezado_escucha()
-            except (serial.SerialException, OSError):
+            puerto_dinamico = autodetectar_puerto_arduino()
+            if puerto_dinamico:
+                try:
+                    ser = serial.Serial(puerto_dinamico, BAUD_RATE, timeout=0.1)
+                    time.sleep(2)
+                    ser.reset_input_buffer()
+                    PUERTO_COM_ACTUAL = puerto_dinamico
+                    imprimir_encabezado_escucha()
+                except (serial.SerialException, OSError):
+                    ser = None
+            
+            if ser is None:
                 limpiar_pantalla()
                 print("=========================================================")
                 print(" CONTROL ACCESO NFC (GOOGLE FIREBASE + RESPALDO LOCAL 📁)")
                 print("=========================================================")
-                print(f" ⚠️ [ADVERTENCIA] Conexión perdida o fallida en [{PUERTO_COM}].")
-                print(" 🔄 Reintentando reconectar automáticamente en 2 segundos...")
+                print(" ⚠️ [ADVERTENCIA] No se detectó ninguna placa Arduino en los puertos COM.")
+                print(" 🔄 Reintentando escaneo automáticamente en 2 segundos...")
                 print("=========================================================")
                 time.sleep(2)
 
         while True:
             try:
                 if ser.in_waiting > 0:
-                    linea = ser.readline().decode('utf-8', errors='ignore').strip()
+                    try:
+                        linea = ser.readline().decode('utf-8', errors='ignore').strip()
+                    except Exception:
+                        linea = ""
                     
                     if linea.startswith("CARD:"):
                         uid = linea.split(":")[1].upper()
-                        
                         usuarios_dict, online = obtener_usuarios_hibrido()
                         
-                        # 1. Evaluación: Mala lectura
                         if len(uid) < 8 or not all(c in '0123456789ABCDEF' for c in uid):
-                            ser.write(b"ERR\n")
+                            try:
+                                ser.write(b"ERR\n")
+                                ser.flush()
+                            except Exception:
+                                pass
                             fecha = registrar_evento_local_y_nube(uid, "Desconocido", "DENEGADO", "MALA_LECTURA")
                             imprimir_encabezado_escucha()
-                            print(f"[{fecha}] ⚠️ DENEGADO -> Error de lectura de tarjeta | UID: {uid}\n")
+                            print(f"[{fecha}] ⚠️ DENEGADO -> Error de lectura | UID: {uid}\n")
                             hablar("Acceso denegado. Error de lectura de tarjeta. Pase la tarjeta de nuevo.")
 
-                        # 2. Evaluación: Usuario Registrado
                         elif uid in usuarios_dict:
                             nombre = usuarios_dict[uid]
-                            ser.write(b"OK\n")
+                            try:
+                                ser.write(b"OK\n")
+                                ser.flush()
+                            except Exception:
+                                pass
                             fecha = registrar_evento_local_y_nube(uid, nombre, "PERMITIDO", "OK")
                             imprimir_encabezado_escucha()
                             print(f"[{fecha}] 🔓 AUTORIZADO -> Usuario: {nombre} | UID: {uid}")
                             hablar(f"Acceso autorizado. Bienvenido {nombre}.")
-                            ejecutar_cuenta_regresiva_chapa(6)
+                            ejecutar_cuenta_regresiva_chapa(3)  # <--- AJUSTADO A 3 SEGUNDOS
 
-                        # 3. Evaluación: Tarjeta No Registrada
                         else:
-                            ser.write(b"ERR\n")
+                            try:
+                                ser.write(b"ERR\n")
+                                ser.flush()
+                            except Exception:
+                                pass
                             fecha = registrar_evento_local_y_nube(uid, "Desconocido", "DENEGADO", "NO_REGISTRADO")
                             imprimir_encabezado_escucha()
                             print(f"[{fecha}] ❌ DENEGADO -> Tarjeta NO registrada | UID: {uid}\n")
                             hablar("Acceso denegado. Tarjeta no registrada en el sistema.")
 
-                        ser.reset_input_buffer()
+                        try:
+                            ser.reset_input_buffer()
+                            ser.reset_output_buffer()
+                        except Exception:
+                            pass
 
                 tecla = capturar_tecla_instantanea()
                 if tecla == TECLA_MENU_OCULTO:
@@ -878,12 +864,14 @@ def main():
 
                 time.sleep(0.02)
 
-            except (serial.SerialException, serial.SerialTimeoutException, OSError):
-                print("\n⚠️ [ALERTA] Pérdida de comunicación en puerto COM. Iniciando reconexión...")
+            except Exception as e:
+                print(f"\n⚠️ [ALERTA] Fallo de hardware o buffer saturado: {e}")
                 try:
-                    ser.close()
+                    if ser:
+                        ser.close()
                 except Exception:
                     pass
+                ser = None
                 time.sleep(1)
                 break
 
