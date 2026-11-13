@@ -175,7 +175,6 @@
         const INTERVALO_ESCANEO_MS = 1200;
         const ANCHO_ESCANEO = 320;   // se envía una imagen chica: basta para reconocer la cara
         let avisoCamara = null;
-        let escaneoIniciado = false;
         let pausaHasta = 0;          // después de un resultado, se espera antes del siguiente escaneo
         let mostrandoAcceso = false; // mientras el resultado ocupa la pantalla, no se escanea
         let fotoActual = null;
@@ -247,10 +246,6 @@
                 await video.play().catch(() => {});
                 avisoCamara = null;
                 estadoEscaneo('● Buscando rostro...');
-                if (!escaneoIniciado) {
-                    escaneoIniciado = true;
-                    escanearRostroAuto();
-                }
             } catch (err) {
                 avisoCamara = `⚠️ No se pudo abrir la cámara (${err.name})`;
                 estadoEscaneo(`⚠️ Cámara: ${err.name}. Toca "Activar Cámara"`);
@@ -329,6 +324,8 @@
             fuente.onerror = () => marcarConexion(false); // el navegador reintenta solo
         }
 
+        // El escaneo corre siempre desde que carga la página: si no hay imagen, espera sola
+        escanearRostroAuto();
         activarCamaraManual();
         setInterval(actualizarReloj, 1000);
         conectarTiempoReal();
