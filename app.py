@@ -149,6 +149,20 @@ def registrar_log(uid, usuario, estado, detalle):
     sincronizar_firebase("POST", "/logs.json", fila)
 
 
+def ultimo_evento_coincide(uid, estado, detalle, segundos):
+    """True si el último registro es igual a este evento y ocurrió hace menos de 'segundos'."""
+    logs = leer_logs()
+    if not logs:
+        return False
+    u = logs[-1]
+    try:
+        ts = int(u.get("timestamp") or 0)
+    except ValueError:
+        return False
+    return (u.get("uid", "") == uid and u.get("estado") == estado
+            and u.get("detalle") == detalle and time.time() - ts < segundos)
+
+
 def encolar_comando(item):
     """Deja un comando para el motor (Proyecto Chapa NFC.py), que lo envía al Arduino."""
     cola = []
@@ -338,8 +352,8 @@ def api_verificar_rostro():
 
         rasgos_vivo = extraer_rasgos(imagen)
         if rasgos_vivo is None:
-            registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_DETECTADO")
-            return jsonify({"success": False, "mensaje": "❌ No se detectó un rostro"})
+            # Sin rostro frente a la cámara: no es un evento, no se registra
+            return jsonify({"success": False, "sin_rostro": True, "mensaje": "Sin rostro"})
 
         usuarios = cargar_usuarios_locales()
         mejor_uid, mejor_similitud = None, -1.0
@@ -353,13 +367,17 @@ def api_verificar_rostro():
 
         if mejor_uid is not None and mejor_similitud >= UMBRAL_SIMILITUD:
             nombre = nombre_de(usuarios[mejor_uid])
-            registrar_log(mejor_uid, nombre, "PERMITIDO", "RECONOCIMIENTO_FACIAL")
-            # Abrir la chapa: el motor recibe la orden y la envía al Arduino
-            encolar_comando({"cmd": "OK", "origen": "FACIAL", "uid": mejor_uid,
-                             "nombre": nombre, "ts": time.time()})
+            # Si la misma persona acaba de entrar, no se vuelve a abrir ni a registrar
+            if not ultimo_evento_coincide(mejor_uid, "PERMITIDO", "RECONOCIMIENTO_FACIAL", 8):
+                registrar_log(mejor_uid, nombre, "PERMITIDO", "RECONOCIMIENTO_FACIAL")
+                # Abrir la chapa: el motor recibe la orden y la envía al Arduino
+                encolar_comando({"cmd": "OK", "origen": "FACIAL", "uid": mejor_uid,
+                                 "nombre": nombre, "ts": time.time()})
             return jsonify({"success": True, "mensaje": f"✅ Autorizado: {nombre}"})
 
-        registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_RECONOCIDO")
+        # Rostro desconocido frente a la cámara: se registra como máximo una vez cada 5 segundos
+        if not ultimo_evento_coincide("", "DENEGADO", "ROSTRO_NO_RECONOCIDO", 5):
+            registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_RECONOCIDO")
         return jsonify({"success": False, "mensaje": "❌ Rostro no reconocido"})
 
     except RuntimeError as e:

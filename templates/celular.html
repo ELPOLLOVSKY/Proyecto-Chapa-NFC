@@ -70,6 +70,17 @@
             cursor: pointer;
             z-index: 10;
         }
+        #escaneo {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            font-size: 0.75rem;
+            color: #00ff88;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 2px 8px;
+            border-radius: 10px;
+            z-index: 10;
+        }
 
         /* BANNER DE ESTADO */
         #banner-estado {
@@ -126,8 +137,8 @@
     <div class="terminal-screen">
         <video id="webcam" autoplay playsinline muted></video>
         <div class="face-frame"></div>
-        <button class="btn-accion" style="left: 15px;" onclick="activarCamaraManual()">📷 Activar Cámara</button>
-        <button class="btn-accion" style="right: 15px;" onclick="capturarYVerificarRostro()">🔘 Escanear</button>
+        <div id="escaneo">● Escaneo facial</div>
+        <button class="btn-accion" onclick="activarCamaraManual()">📷 Activar Cámara</button>
     </div>
 
     <div id="banner-estado" class="estado-inactivo">
@@ -151,8 +162,12 @@
             MALA_LECTURA: "ERROR DE LECTURA DE TARJETA"
         };
         const MOSTRAR_EVENTO_SEGUNDOS = 6;
+        const INTERVALO_ESCANEO_MS = 1200;
+        const ANCHO_ESCANEO = 320;   // se envía una imagen chica: basta para reconocer la cara
         let avisoCamara = null;
         let fotoActual = null;
+        let escaneoIniciado = false;
+        let pausaHasta = 0;          // después de un resultado, se espera antes del siguiente escaneo
 
         function pintarBanner(clase, titulo, datos) {
             const banner = document.getElementById('banner-estado');
@@ -199,6 +214,7 @@
             }
         }
 
+        // ----- Cámara -----
         async function activarCamaraManual() {
             // En el celular, el navegador bloquea la cámara si la página no es HTTPS
             if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -211,47 +227,53 @@
                 });
                 document.getElementById('webcam').srcObject = stream;
                 avisoCamara = null;
+                if (!escaneoIniciado) {
+                    escaneoIniciado = true;
+                    escanearRostroAuto();
+                }
             } catch (err) {
                 avisoCamara = `⚠️ No se pudo abrir la cámara (${err.name})`;
             }
         }
 
+        // ----- Escaneo facial automático (sin botones) -----
+        async function escanearRostroAuto() {
+            const video = document.getElementById('webcam');
+            if (video.videoWidth && Date.now() >= pausaHasta) {
+                const escala = ANCHO_ESCANEO / video.videoWidth;
+                const canvas = document.createElement('canvas');
+                canvas.width = ANCHO_ESCANEO;
+                canvas.height = Math.round(video.videoHeight * escala);
+                canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                try {
+                    const r = await fetch('/api/verificar_rostro', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg', 0.8), auto: true })
+                    }).then(res => res.json());
+
+                    if (r.success) {
+                        pausaHasta = Date.now() + 6000;      // ya autorizado: no volver a abrir enseguida
+                    } else if (r.sin_rostro) {
+                        pausaHasta = 0;                      // nadie frente a la cámara: seguir revisando
+                    } else {
+                        pausaHasta = Date.now() + 2500;      // rostro no reconocido: pausa corta
+                    }
+                } catch (err) {
+                    pausaHasta = Date.now() + 3000;          // sin conexión: esperar y reintentar
+                }
+            }
+            setTimeout(escanearRostroAuto, INTERVALO_ESCANEO_MS);
+        }
+
+        // ----- Reloj -----
         function actualizarReloj() {
             const ahora = new Date();
             document.getElementById('reloj').innerText = ahora.toLocaleTimeString('es-CL');
             document.getElementById('fecha').innerText = ahora.toLocaleDateString('es-CL', { weekday: 'short', month: 'short', day: 'numeric' });
         }
 
-        async function capturarYVerificarRostro() {
-            const video = document.getElementById('webcam');
-            if (!video.videoWidth) {
-                avisoCamara = '⚠️ Primero activa la cámara';
-                return;
-            }
-            avisoCamara = null;
-            pintarBanner('estado-espera', '🔍 Verificando rostro...', null);
-
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            try {
-                const res = await fetch('/api/verificar_rostro', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg') })
-                });
-                const r = await res.json();
-                if (!r.success && !r.mensaje.startsWith('❌')) {
-                    avisoCamara = `⚠️ ${r.mensaje}`;
-                }
-            } catch (err) {
-                avisoCamara = '⚠️ Sin conexión con el servidor';
-            }
-            actualizarEstado();
-        }
-
+        // ----- Estado en tiempo real -----
         function actualizarEstado() {
             fetch('/api/estado', { cache: 'no-store' })
                 .then(res => res.json())
@@ -259,7 +281,6 @@
                 .catch(err => console.error(err));
         }
 
-        // Tiempo real: el servidor empuja el estado cuando cambia (Server-Sent Events)
         function marcarConexion(activa) {
             const el = document.getElementById('conexion');
             el.innerText = activa ? '● EN VIVO' : '● SIN CONEXIÓN';
