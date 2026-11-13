@@ -28,6 +28,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVO_CSV_LOGS = os.path.join(BASE_DIR, "registros_locales.csv")
 ARCHIVO_JSON_USUARIOS = os.path.join(BASE_DIR, "usuarios_locales.json")
 ARCHIVO_COLA_DEBUG = os.path.join(BASE_DIR, "cola_debug.json")
+ARCHIVO_ULTIMA_TARJETA = os.path.join(BASE_DIR, "ultima_tarjeta.json")
 CARPETA_ROSTROS = os.path.join(BASE_DIR, "rostros_usuarios")
 CARPETA_MODELOS = os.path.join(BASE_DIR, "modelos")
 ARCHIVO_YUNET = os.path.join(CARPETA_MODELOS, "face_detection_yunet_2023mar.onnx")
@@ -428,6 +429,23 @@ def api_usuario_eliminar():
     _cache_rasgos.pop(uid, None)
     sincronizar_firebase("DELETE", f"/usuarios/{uid}.json")
     return jsonify({"success": True, "mensaje": "Usuario eliminado"})
+
+
+@app.route('/api/tarjeta/ultima')
+def api_tarjeta_ultima():
+    """Devuelve la última tarjeta leída por el lector si fue después de 'desde' (segundos epoch)."""
+    try:
+        desde = float(request.args.get('desde', 0) or 0)
+    except ValueError:
+        desde = 0.0
+    try:
+        with open(ARCHIVO_ULTIMA_TARJETA, 'r', encoding='utf-8') as f:
+            dato = json.load(f)
+    except Exception:
+        return jsonify({"uid": None})
+    if float(dato.get("ts", 0)) > desde:
+        return jsonify({"uid": dato.get("uid"), "ts": dato.get("ts")})
+    return jsonify({"uid": None})
 
 
 @app.route('/api/debug', methods=['POST'])

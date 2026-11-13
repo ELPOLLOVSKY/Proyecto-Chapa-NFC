@@ -252,6 +252,25 @@ def ejecutar_cuenta_regresiva_chapa(segundos=3):  # <--- AJUSTADO A 3 SEGUNDOS
         time.sleep(1)
     print("\r🔒 [CHAPA DESACTIVADA] Estado normal restablecido.                    \n")
 
+ARCHIVO_ULTIMA_TARJETA = os.path.join(RUTA_BASE, "ultima_tarjeta.json")
+_ultima_lectura = {"uid": None, "ts": 0.0}
+
+def guardar_ultima_tarjeta(uid):
+    """Deja la última tarjeta leída para que la interfaz web pueda usarla al registrar."""
+    try:
+        with open(ARCHIVO_ULTIMA_TARJETA, 'w', encoding='utf-8') as f:
+            json.dump({"uid": uid, "ts": time.time()}, f)
+    except OSError:
+        pass
+
+def es_lectura_repetida(uid, ventana=2.0):
+    """True si es la misma tarjeta leída hace menos de 'ventana' segundos (el lector la reenvía mientras está apoyada)."""
+    ahora = time.time()
+    repetida = uid == _ultima_lectura["uid"] and (ahora - _ultima_lectura["ts"]) < ventana
+    _ultima_lectura["uid"] = uid
+    _ultima_lectura["ts"] = ahora
+    return repetida
+
 def procesar_cola_debug(ser):
     """Envía al Arduino los comandos de prueba que la interfaz web deja en cola (app.py)."""
     if not os.path.exists(ARCHIVO_COLA_DEBUG):
@@ -860,6 +879,9 @@ def main():
                     
                     if linea.startswith("CARD:"):
                         uid = linea.split(":")[1].upper()
+                        guardar_ultima_tarjeta(uid)  # para que el panel pueda tomar la tarjeta escaneada
+                        if es_lectura_repetida(uid):
+                            continue  # la misma tarjeta sigue apoyada en el lector: no abrir dos veces
                         usuarios_dict, online = obtener_usuarios_hibrido()
                         
                         if len(uid) < 8 or not all(c in '0123456789ABCDEF' for c in uid):
@@ -913,7 +935,7 @@ def main():
                 time.sleep(0.02)
 
             except Exception as e:
-                print(f"\n⚠️ [ALERTA] Fallo de hardware o buffer saturado: {e}")
+                print(f"\n⚠️ [ALERTA] Error en el puerto serie ({type(e).__name__}): {e}")
                 try:
                     if ser:
                         ser.close()

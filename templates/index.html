@@ -5,42 +5,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Monitoreo y Configuración NFC</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #tabla-usuarios tr[data-uid] { cursor: pointer; }
+        #tabla-usuarios tr.seleccionada { outline: 2px solid #0dcaf0; }
+    </style>
 </head>
 <body class="bg-dark text-light">
     <div class="container py-4">
         <header class="pb-3 mb-4 border-bottom d-flex align-items-center justify-content-between">
-            <h2>🚪 Monitor de Accesos NFC (Traductor Visual) <span id="conexion" class="small text-secondary">● CONECTANDO</span></h2>
+            <h2>🚪 Monitor de Accesos NFC <span id="conexion" class="small text-secondary">● CONECTANDO</span></h2>
             <a href="/celular" target="_blank" class="btn btn-outline-info btn-sm">📱 Abrir Vista Celular</a>
         </header>
 
         <div class="row g-4">
-            <!-- PANEL DE CONFIGURACIÓN -->
+            <!-- PANEL DE REGISTRO -->
             <div class="col-md-5">
                 <div class="card bg-secondary text-light shadow-sm mb-4">
-                    <div class="card-header bg-primary fw-bold">🎴 Configuración: Agregar / Editar Usuario</div>
+                    <div class="card-header bg-primary fw-bold">🎴 Registro de usuario</div>
                     <div class="card-body">
-                        <input type="text" id="input-uid" class="form-control mb-2" placeholder="Código UID (Ej: 0484CAB9)">
-                        <input type="text" id="input-nombre" class="form-control mb-3" placeholder="Nombre del Usuario">
-                        <button class="btn btn-success w-100 fw-bold" onclick="guardarUsuario()">💾 Guardar Usuario</button>
-                        <div id="msg-usuario" class="small mt-2"></div>
-                    </div>
-                </div>
+                        <input type="text" id="input-nombre" class="form-control mb-2" placeholder="Nombre del usuario">
 
-                <div class="card bg-secondary text-light shadow-sm mb-4">
-                    <div class="card-header bg-info text-dark fw-bold">📸 Registrar rostro del usuario</div>
-                    <div class="card-body">
-                        <p class="small mb-2">Primero guarda el usuario con su tarjeta. Luego escribe su UID arriba, ubica su cara frente a la cámara de este computador y captura.</p>
-                        <video id="cam-admin" autoplay playsinline muted class="w-100 rounded mb-2 bg-black" style="max-height: 220px;"></video>
-                        <div class="d-grid gap-2">
-                            <button class="btn btn-outline-light btn-sm" onclick="iniciarCamaraAdmin()">📷 Activar cámara</button>
-                            <button class="btn btn-info fw-bold" onclick="guardarRostro()">📸 Capturar rostro para el UID</button>
+                        <div class="input-group mb-2">
+                            <input type="text" id="input-uid" class="form-control" placeholder="UID de la tarjeta (o escanéala)">
+                            <button id="btn-escanear" class="btn btn-warning fw-bold" onclick="escanearTarjeta()">🎴 Escanear</button>
                         </div>
-                        <div id="msg-rostro" class="small mt-2"></div>
+
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="chk-tarjeta" checked>
+                            <label class="form-check-label" for="chk-tarjeta">Registrar tarjeta</label>
+                        </div>
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="chk-rostro" onchange="cambioRostro()">
+                            <label class="form-check-label" for="chk-rostro">Agregar reconocimiento facial</label>
+                        </div>
+
+                        <div id="bloque-camara" class="d-none mb-2">
+                            <video id="cam-admin" autoplay playsinline muted class="w-100 rounded bg-black" style="max-height: 220px;"></video>
+                            <button class="btn btn-info btn-sm w-100 mt-2" onclick="capturarRostroAhora()">📸 Capturar rostro ahora</button>
+                        </div>
+
+                        <button class="btn btn-success w-100 fw-bold" onclick="guardarRegistro()">💾 Guardar</button>
+                        <button class="btn btn-outline-light btn-sm w-100 mt-2" onclick="nuevoUsuario()">➕ Nuevo usuario</button>
+                        <div id="msg-usuario" class="small mt-2"></div>
+                        <div id="seleccion" class="small text-info mt-2">Nuevo usuario. Para agregar solo rostro, haz clic en un usuario de la lista.</div>
                     </div>
                 </div>
 
                 <div class="card bg-secondary text-light shadow-sm mb-4">
-                    <div class="card-header bg-danger fw-bold">⚡ Configuración: Pruebas de Hardware (Manda al Arduino)</div>
+                    <div class="card-header bg-danger fw-bold">⚡ Pruebas de Hardware (manda al Arduino)</div>
                     <div class="card-body d-grid gap-2">
                         <button class="btn btn-outline-light" onclick="enviarDebug('DBG_START')">🔄 Modo Parpadeo Lento</button>
                         <button class="btn btn-outline-warning" onclick="enviarDebug('DBG_CHAPA_ON')">🔌 Activar Chapa Continua</button>
@@ -64,10 +76,10 @@
                 </div>
 
                 <div class="card bg-secondary text-light shadow-sm">
-                    <div class="card-header bg-dark fw-bold">🎴 Usuarios Registrados</div>
-                    <div class="card-body p-0" style="max-height: 250px; overflow-y: auto;">
+                    <div class="card-header bg-dark fw-bold">🎴 Usuarios Registrados <span class="small text-secondary">(haz clic para seleccionar)</span></div>
+                    <div class="card-body p-0" style="max-height: 300px; overflow-y: auto;">
                         <table class="table table-dark table-sm mb-0">
-                            <thead><tr><th>Nombre</th><th>UID</th><th>Rostro</th><th>Acción</th></tr></thead>
+                            <thead><tr><th>Nombre</th><th>Tarjeta</th><th>Rostro</th><th>Acción</th></tr></thead>
                             <tbody id="tabla-usuarios"></tbody>
                         </table>
                     </div>
@@ -77,6 +89,8 @@
     </div>
     <script>
         let streamAdmin = null;
+        let usuarioSeleccionado = null;   // uid de un usuario existente elegido en la lista
+        let ultimosUsuarios = {};
 
         function escapar(texto) {
             const div = document.createElement('div');
@@ -90,29 +104,36 @@
             el.innerText = texto;
         }
 
+        function post(url, cuerpo) {
+            return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) })
+                .then(res => res.json());
+        }
+
+        // ----- Tiempo real -----
         function refrescar() {
             fetch('/api/estado', { cache: 'no-store' }).then(res => res.json()).then(renderizar).catch(() => {});
         }
 
         function renderizar(data) {
-            {
-                const tbody = document.getElementById('tabla-logs');
-                tbody.innerHTML = data.logs.map(l => {
-                    const color = l.estado === 'PERMITIDO' ? 'text-success fw-bold' : 'text-danger fw-bold';
-                    const hora = (l.fecha_hora || '').split(' ')[1] || '';
-                    return `<tr><td>${escapar(hora)}</td><td class="${color}">${escapar(l.estado)}</td>` +
-                           `<td>${escapar(l.usuario)}</td><td><code>${escapar(l.uid)}</code></td>` +
-                           `<td>${escapar(l.detalle)}</td></tr>`;
-                }).join('');
+            const tbody = document.getElementById('tabla-logs');
+            tbody.innerHTML = data.logs.map(l => {
+                const color = l.estado === 'PERMITIDO' ? 'text-success fw-bold' : 'text-danger fw-bold';
+                const hora = (l.fecha_hora || '').split(' ')[1] || '';
+                return `<tr><td>${escapar(hora)}</td><td class="${color}">${escapar(l.estado)}</td>` +
+                       `<td>${escapar(l.usuario)}</td><td><code>${escapar(l.uid)}</code></td>` +
+                       `<td>${escapar(l.detalle)}</td></tr>`;
+            }).join('');
 
-                const tusers = document.getElementById('tabla-usuarios');
-                tusers.innerHTML = Object.entries(data.usuarios).map(([uid, valor]) => {
-                    const nombre = typeof valor === 'object' ? valor.nombre : valor;
-                    return `<tr><td>${escapar(nombre)}</td><td><code>${escapar(uid)}</code></td>` +
-                           `<td><img src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" class="rounded-circle" style="object-fit:cover" onerror="this.replaceWith('—')"></td>` +
-                           `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
-                }).join('');
-            }
+            ultimosUsuarios = {};
+            const tusers = document.getElementById('tabla-usuarios');
+            tusers.innerHTML = Object.entries(data.usuarios).map(([uid, valor]) => {
+                const nombre = typeof valor === 'object' ? valor.nombre : valor;
+                ultimosUsuarios[uid] = nombre;
+                const clase = uid === usuarioSeleccionado ? ' class="seleccionada"' : '';
+                return `<tr data-uid="${escapar(uid)}"${clase}><td>${escapar(nombre)}</td><td><code>${escapar(uid)}</code></td>` +
+                       `<td><img src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" class="rounded-circle" style="object-fit:cover" onerror="this.replaceWith('—')"></td>` +
+                       `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="event.stopPropagation(); eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
+            }).join('');
         }
 
         function conectarTiempoReal() {
@@ -128,67 +149,147 @@
             el.className = activa ? 'text-success small' : 'text-danger small';
         }
 
-        function guardarUsuario() {
-            const uid = document.getElementById('input-uid').value.trim().toUpperCase();
-            const nombre = document.getElementById('input-nombre').value.trim();
-            fetch('/api/usuario/guardar', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ uid, nombre })
-            }).then(res => res.json()).then(r => {
-                mostrarMensaje('msg-usuario', r.success, r.mensaje);
-                if (r.success) {
-                    document.getElementById('input-uid').value = '';
-                    document.getElementById('input-nombre').value = '';
-                    refrescar();
-                }
-            }).catch(() => mostrarMensaje('msg-usuario', false, 'Error de conexión con el servidor'));
+        // ----- Selección de usuario existente -----
+        document.getElementById('tabla-usuarios').addEventListener('click', (e) => {
+            const fila = e.target.closest('tr[data-uid]');
+            if (fila && e.target.tagName !== 'BUTTON') seleccionarUsuario(fila.dataset.uid);
+        });
+
+        function seleccionarUsuario(uid) {
+            usuarioSeleccionado = uid;
+            document.getElementById('input-uid').value = uid;
+            document.getElementById('input-nombre').value = ultimosUsuarios[uid] || '';
+            document.getElementById('chk-tarjeta').checked = false;   // la tarjeta ya está registrada
+            document.getElementById('seleccion').innerText =
+                `Seleccionado: ${ultimosUsuarios[uid] || uid}. Marca "Agregar reconocimiento facial" y guarda para agregarle el rostro.`;
+            mostrarMensaje('msg-usuario', true, '');
+            refrescar();
         }
 
-        function eliminarUsuario(uid) {
-            if (confirm('¿Seguro que deseas eliminar este usuario?')) {
-                fetch('/api/usuario/eliminar', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ uid })
-                }).then(() => refrescar());
+        function nuevoUsuario() {
+            usuarioSeleccionado = null;
+            document.getElementById('input-uid').value = '';
+            document.getElementById('input-nombre').value = '';
+            document.getElementById('chk-tarjeta').checked = true;
+            document.getElementById('chk-rostro').checked = false;
+            cambioRostro();
+            document.getElementById('seleccion').innerText = 'Nuevo usuario. Para agregar solo rostro, haz clic en un usuario de la lista.';
+            mostrarMensaje('msg-usuario', true, '');
+        }
+
+        // ----- Tarjeta: escanear desde el lector -----
+        async function escanearTarjeta() {
+            const boton = document.getElementById('btn-escanear');
+            const inicio = Date.now() / 1000;
+            boton.disabled = true;
+            mostrarMensaje('msg-usuario', true, '📡 Acerca la tarjeta al lector...');
+            try {
+                for (let i = 0; i < 40; i++) {   // 20 segundos
+                    await new Promise(r => setTimeout(r, 500));
+                    const r = await fetch(`/api/tarjeta/ultima?desde=${inicio}`, { cache: 'no-store' }).then(res => res.json());
+                    if (r.uid) {
+                        document.getElementById('input-uid').value = r.uid;
+                        document.getElementById('chk-tarjeta').checked = true;
+                        mostrarMensaje('msg-usuario', true, `✅ Tarjeta leída: ${r.uid}`);
+                        return;
+                    }
+                }
+                mostrarMensaje('msg-usuario', false, 'No se detectó ninguna tarjeta en 20 segundos. Revisa que el lector esté conectado.');
+            } catch (err) {
+                mostrarMensaje('msg-usuario', false, 'Error de conexión con el servidor');
+            } finally {
+                boton.disabled = false;
             }
+        }
+
+        // ----- Rostro: cámara del computador -----
+        function cambioRostro() {
+            const marcado = document.getElementById('chk-rostro').checked;
+            document.getElementById('bloque-camara').classList.toggle('d-none', !marcado);
+            if (marcado && !streamAdmin) iniciarCamaraAdmin();
         }
 
         async function iniciarCamaraAdmin() {
             try {
                 streamAdmin = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
                 document.getElementById('cam-admin').srcObject = streamAdmin;
-                mostrarMensaje('msg-rostro', true, 'Cámara activa');
             } catch (err) {
-                mostrarMensaje('msg-rostro', false, `No se pudo abrir la cámara (${err.name})`);
+                mostrarMensaje('msg-usuario', false, `No se pudo abrir la cámara (${err.name})`);
             }
         }
 
-        function guardarRostro() {
-            const uid = document.getElementById('input-uid').value.trim().toUpperCase();
+        function capturarFrame() {
             const video = document.getElementById('cam-admin');
-            if (!uid) return mostrarMensaje('msg-rostro', false, 'Escribe el UID de la tarjeta arriba');
-            if (!video.videoWidth) return mostrarMensaje('msg-rostro', false, 'Primero activa la cámara');
-
+            if (!video.videoWidth) return null;
             const canvas = document.createElement('canvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
+            return canvas.toDataURL('image/jpeg');
+        }
 
-            fetch('/api/usuario/foto', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ uid, imagen: canvas.toDataURL('image/jpeg') })
-            }).then(res => res.json()).then(r => {
-                mostrarMensaje('msg-rostro', r.success, r.mensaje);
-                refrescar();
-            }).catch(() => mostrarMensaje('msg-rostro', false, 'Error de conexión con el servidor'));
+        async function capturarRostroAhora() {
+            const uid = document.getElementById('input-uid').value.trim().toUpperCase();
+            if (!uid) return mostrarMensaje('msg-usuario', false, 'Primero escanea o escribe la tarjeta del usuario');
+            const img = capturarFrame();
+            if (!img) return mostrarMensaje('msg-usuario', false, 'La cámara no está activa');
+            const r = await post('/api/usuario/foto', { uid, imagen: img });
+            mostrarMensaje('msg-usuario', r.success, r.mensaje);
+            refrescar();
+        }
+
+        // ----- Guardar: tarjeta, rostro o ambos -----
+        async function guardarRegistro() {
+            const uid = document.getElementById('input-uid').value.trim().toUpperCase();
+            const nombre = document.getElementById('input-nombre').value.trim();
+            const quiereTarjeta = document.getElementById('chk-tarjeta').checked;
+            const quiereRostro = document.getElementById('chk-rostro').checked;
+
+            if (!quiereTarjeta && !quiereRostro) return mostrarMensaje('msg-usuario', false, 'Marca "Registrar tarjeta" o "Agregar reconocimiento facial" (o ambos)');
+
+            let uidFinal = uid;
+            if (quiereTarjeta) {
+                if (!uid) return mostrarMensaje('msg-usuario', false, 'Escanea o escribe el UID de la tarjeta');
+                if (!nombre) return mostrarMensaje('msg-usuario', false, 'Escribe el nombre del usuario');
+            } else {
+                if (!usuarioSeleccionado) return mostrarMensaje('msg-usuario', false, 'Para agregar solo rostro, primero haz clic en un usuario de la lista');
+                uidFinal = usuarioSeleccionado;
+            }
+            if (quiereRostro && !streamAdmin) return mostrarMensaje('msg-usuario', false, 'Activa la cámara para capturar el rostro');
+
+            // 1) Tarjeta y nombre
+            if (quiereTarjeta) {
+                const r = await post('/api/usuario/guardar', { uid, nombre });
+                if (!r.success) return mostrarMensaje('msg-usuario', false, r.mensaje);
+            }
+            // 2) Rostro (se toma justo al guardar)
+            let mensajes = [];
+            if (quiereTarjeta) mensajes.push(`Usuario ${nombre} guardado`);
+            if (quiereRostro) {
+                const img = capturarFrame();
+                const r = await post('/api/usuario/foto', { uid: uidFinal, imagen: img });
+                if (!r.success) return mostrarMensaje('msg-usuario', false, r.mensaje);
+                mensajes.push('rostro guardado');
+            }
+            mostrarMensaje('msg-usuario', true, '✅ ' + mensajes.join(' y '));
+            usuarioSeleccionado = uidFinal;
+            document.getElementById('chk-rostro').checked = false;
+            cambioRostro();
+            refrescar();
+        }
+
+        function eliminarUsuario(uid) {
+            if (confirm('¿Seguro que deseas eliminar este usuario?')) {
+                post('/api/usuario/eliminar', { uid }).then(() => {
+                    if (usuarioSeleccionado === uid) nuevoUsuario();
+                    refrescar();
+                });
+            }
         }
 
         function enviarDebug(cmd) {
-            fetch('/api/debug', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cmd })
-            }).then(res => res.json()).then(r => mostrarMensaje('msg-debug', r.success, r.mensaje))
-              .catch(() => mostrarMensaje('msg-debug', false, 'Error de conexión con el servidor'));
+            post('/api/debug', { cmd }).then(r => mostrarMensaje('msg-debug', r.success, r.mensaje))
+                .catch(() => mostrarMensaje('msg-debug', false, 'Error de conexión con el servidor'));
         }
 
         conectarTiempoReal();
