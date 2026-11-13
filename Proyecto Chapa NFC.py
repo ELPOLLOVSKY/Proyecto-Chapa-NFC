@@ -31,6 +31,8 @@ def obtener_ruta_base():
 RUTA_BASE = obtener_ruta_base()
 ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
 ARCHIVO_JSON_USUARIOS = os.path.join(RUTA_BASE, "usuarios_locales.json")
+ARCHIVO_COLA_DEBUG = os.path.join(RUTA_BASE, "cola_debug.json")
+COMANDOS_DEBUG_PERMITIDOS = {"DBG_START", "DBG_CHAPA_ON", "DBG_CHAPA_OFF", "OK"}
 
 # Variables globales de contadores
 cant_permitidos = 0
@@ -245,6 +247,28 @@ def ejecutar_cuenta_regresiva_chapa(segundos=3):  # <--- AJUSTADO A 3 SEGUNDOS
         print(f"\r⚡ [PULSOS DE CHAPA ACTIVOS] -> Bloqueando en: {restante} seg... ", end="", flush=True)
         time.sleep(1)
     print("\r🔒 [CHAPA DESACTIVADA] Estado normal restablecido.                    \n")
+
+def procesar_cola_debug(ser):
+    """Envía al Arduino los comandos de prueba que la interfaz web deja en cola (app.py)."""
+    if not os.path.exists(ARCHIVO_COLA_DEBUG):
+        return
+    # Se renombra primero para que la web pueda escribir una cola nueva sin pisar esta lectura
+    en_proceso = ARCHIVO_COLA_DEBUG + ".proc"
+    try:
+        os.replace(ARCHIVO_COLA_DEBUG, en_proceso)
+        with open(en_proceso, 'r', encoding='utf-8') as f:
+            cola = json.load(f)
+        os.remove(en_proceso)
+    except Exception:
+        return
+    for item in cola:
+        cmd = str(item.get("cmd", "")).upper()
+        if cmd in COMANDOS_DEBUG_PERMITIDOS:
+            try:
+                ser.write(f"{cmd}\n".encode('utf-8'))
+                ser.flush()
+            except (serial.SerialException, OSError):
+                return
 
 def capturar_tecla_instantanea():
     if msvcrt.kbhit():
@@ -856,6 +880,8 @@ def main():
                             ser.reset_output_buffer()
                         except Exception:
                             pass
+
+                procesar_cola_debug(ser)
 
                 tecla = capturar_tecla_instantanea()
                 if tecla == TECLA_MENU_OCULTO:

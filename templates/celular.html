@@ -38,7 +38,7 @@
             width: 100%;
             max-width: 380px;
             flex-grow: 1;
-            max-height: 44vh;
+            max-height: 40vh;
             background: #000;
             border-radius: 12px;
             overflow: hidden;
@@ -48,12 +48,7 @@
             align-items: center;
             margin: 4px 0;
         }
-        #webcam {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            transform: scaleX(-1);
-        }
+        #webcam { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
         .face-frame {
             position: absolute;
             width: 130px;
@@ -76,40 +71,48 @@
             z-index: 10;
         }
 
-        /* BANNER DE ESTADO GIGANTE (AUTORIZADO / DENEGADO / ESPERA) */
+        /* BANNER DE ESTADO */
         #banner-estado {
             width: 100%;
             max-width: 400px;
-            font-size: 1.05rem;
-            font-weight: bold;
             padding: 14px;
-            border-radius: 8px;
+            border-radius: 10px;
             text-align: center;
-            transition: all 0.2s ease;
+            transition: background-color 0.2s ease;
         }
-        .estado-listo { background-color: #1b5e20; color: #a5d6a7; border: 2px solid #4caf50; }
+        #b-titulo { font-size: 1.05rem; font-weight: bold; }
+        .estado-ok { background-color: #1b5e20; color: #a5d6a7; border: 2px solid #4caf50; }
         .estado-espera { background-color: #e65100; color: #ffe0b2; border: 2px solid #ff9800; }
         .estado-denegado { background-color: #b71c1c; color: #ffcdd2; border: 2px solid #f44336; }
+        .estado-inactivo { background-color: #1a1a1a; color: #bbb; border: 2px solid #333; }
 
-        .info-acceso {
-            width: 100%;
-            max-width: 400px;
-            background: #1a1a1a;
-            padding: 10px 12px;
-            border-radius: 8px;
-            display: flex;
+        #b-detalle {
+            display: none;
             align-items: center;
-            gap: 12px;
-            border-left: 4px solid #00ff88;
-            margin-top: 4px;
+            gap: 14px;
+            margin-top: 12px;
+            text-align: left;
+            color: #fff;
         }
-        .info-avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #333; }
-        .info-detalles { text-align: left; flex-grow: 1; overflow: hidden; }
-        .info-detalles b { font-size: 0.9rem; color: #fff; }
-        .info-detalles p { font-size: 0.75rem; color: #aaa; margin-top: 2px; }
-        .badge-estado { padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
-        .badge-ok { background: #2e7d32; color: #fff; }
-        .badge-fail { background: #c62828; color: #fff; }
+        #b-foto, #b-foto-vacia {
+            width: 96px;
+            height: 96px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            border: 3px solid #fff;
+        }
+        #b-foto { object-fit: cover; display: none; background: #333; }
+        #b-foto-vacia {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: #333;
+            font-size: 2rem;
+        }
+        .b-texto { overflow: hidden; }
+        #b-nombre { display: block; font-size: 1.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #b-uid { display: block; font-size: 0.9rem; color: #ddd; margin-top: 4px; font-family: monospace; }
+        #b-hora { display: block; font-size: 0.75rem; color: #aaa; margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -122,35 +125,92 @@
     <div class="terminal-screen">
         <video id="webcam" autoplay playsinline muted></video>
         <div class="face-frame"></div>
-        <button class="btn-accion" onclick="activarCamaraManual()">📷 Activar Cámara</button>
+        <button class="btn-accion" style="left: 15px;" onclick="activarCamaraManual()">📷 Activar Cámara</button>
         <button class="btn-accion" style="right: 15px;" onclick="capturarYVerificarRostro()">🔘 Escanear</button>
     </div>
 
-    <!-- BANNER DE ESTADO DINÁMICO -->
-    <div id="banner-estado" class="estado-listo">
-        ✅ TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO
-    </div>
-
-    <div class="info-acceso">
-        <img src="https://via.placeholder.com/42" class="info-avatar" id="u-avatar" alt="Avatar">
-        <div class="info-detalles">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <b id="u-nombre">Esperando lectura...</b>
-                <span id="u-badge" class="badge-estado badge-ok">ESPERA</span>
+    <div id="banner-estado" class="estado-inactivo">
+        <div id="b-titulo">TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO</div>
+        <div id="b-detalle">
+            <img id="b-foto" alt="Rostro">
+            <div id="b-foto-vacia">👤</div>
+            <div class="b-texto">
+                <b id="b-nombre">-</b>
+                <span id="b-uid">-</span>
+                <span id="b-hora"></span>
             </div>
-            <p id="u-meta">UID: -------- | --:--:--</p>
         </div>
     </div>
 
     <script>
+        const MOTIVOS = {
+            ROSTRO_NO_RECONOCIDO: "ROSTRO NO RECONOCIDO",
+            ROSTRO_NO_DETECTADO: "NO SE DETECTÓ ROSTRO",
+            NO_REGISTRADO: "TARJETA NO REGISTRADA",
+            MALA_LECTURA: "ERROR DE LECTURA DE TARJETA"
+        };
+        const MOSTRAR_EVENTO_SEGUNDOS = 6;
+        let avisoCamara = null;
+        let fotoActual = null;
+
+        function pintarBanner(clase, titulo, datos) {
+            const banner = document.getElementById('banner-estado');
+            banner.className = clase;
+            document.getElementById('b-titulo').innerText = titulo;
+
+            const detalle = document.getElementById('b-detalle');
+            if (!datos) {
+                detalle.style.display = 'none';
+                return;
+            }
+            detalle.style.display = 'flex';
+            document.getElementById('b-nombre').innerText = datos.usuario || 'Desconocido';
+            document.getElementById('b-uid').innerText = datos.uid ? `Tarjeta: ${datos.uid}` : 'Sin tarjeta asociada';
+            document.getElementById('b-hora').innerText = datos.fecha_hora || '';
+
+            // Cambiar la foto solo si corresponde a otra persona (evita parpadeo en cada consulta)
+            const foto = document.getElementById('b-foto');
+            const fotoVacia = document.getElementById('b-foto-vacia');
+            if (datos.foto_url && datos.foto_url !== fotoActual) {
+                fotoActual = datos.foto_url;
+                foto.src = datos.foto_url;
+            }
+            foto.style.display = datos.foto_url ? 'block' : 'none';
+            fotoVacia.style.display = datos.foto_url ? 'none' : 'flex';
+        }
+
+        function renderizarEstado(data) {
+            const u = data.ultimo;
+            const reciente = u && u.hace_segundos < MOSTRAR_EVENTO_SEGUNDOS;
+
+            if (reciente && u.estado === 'PERMITIDO') {
+                const titulo = data.chapa_abierta
+                    ? `🔓 ACCESO AUTORIZADO · PUERTA ABIERTA (${data.tiempo_restante}s)`
+                    : '🔓 ACCESO AUTORIZADO';
+                pintarBanner('estado-ok', titulo, u);
+            } else if (reciente) {
+                const motivo = MOTIVOS[u.detalle] || 'DENEGADO';
+                pintarBanner('estado-denegado', `❌ ACCESO DENEGADO · ${motivo}`, u);
+            } else if (avisoCamara) {
+                pintarBanner('estado-espera', avisoCamara, null);
+            } else {
+                pintarBanner('estado-inactivo', 'TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO', null);
+            }
+        }
+
         async function activarCamaraManual() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                avisoCamara = '⚠️ Cámara bloqueada: abre esta página con https://';
+                return;
+            }
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "user" }, audio: false 
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "user" }, audio: false
                 });
                 document.getElementById('webcam').srcObject = stream;
+                avisoCamara = null;
             } catch (err) {
-                console.warn("Cámara no iniciada:", err);
+                avisoCamara = `⚠️ No se pudo abrir la cámara (${err.name})`;
             }
         }
 
@@ -160,76 +220,46 @@
             document.getElementById('fecha').innerText = ahora.toLocaleDateString('es-CL', { weekday: 'short', month: 'short', day: 'numeric' });
         }
 
-        function capturarYVerificarRostro() {
+        async function capturarYVerificarRostro() {
             const video = document.getElementById('webcam');
+            if (!video.videoWidth) {
+                avisoCamara = '⚠️ Primero activa la cámara';
+                return;
+            }
+            avisoCamara = null;
+            pintarBanner('estado-espera', '🔍 Verificando rostro...', null);
+
             const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth || 320;
-            canvas.height = video.videoHeight || 240;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            fetch('/api/verificar_rostro', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg') })
-            }).catch(err => console.error(err));
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            try {
+                const res = await fetch('/api/verificar_rostro', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg') })
+                });
+                const r = await res.json();
+                if (!r.success && !r.mensaje.startsWith('❌')) {
+                    avisoCamara = `⚠️ ${r.mensaje}`;
+                }
+            } catch (err) {
+                avisoCamara = '⚠️ Sin conexión con el servidor';
+            }
+            actualizarEstado();
         }
 
         function actualizarEstado() {
-            fetch('/api/estado')
+            fetch('/api/estado', { cache: 'no-store' })
                 .then(res => res.json())
-                .then(data => {
-                    const banner = document.getElementById('banner-estado');
-                    
-                    if (data.logs && data.logs.length > 0) {
-                        let ultimo = data.logs[0];
-                        let ahoraEpoch = Math.floor(Date.now() / 1000);
-                        let diffTiempo = ahoraEpoch - (parseInt(ultimo.timestamp) || 0);
-
-                        // Si el último evento pasó hace menos de 5 segundos, dispara el banner de color
-                        if (diffTiempo < 5) {
-                            if (ultimo.estado === "PERMITIDO") {
-                                banner.className = "estado-espera";
-                                banner.innerHTML = `🔓 ACCESO AUTORIZADO<br>${ultimo.usuario}`;
-                            } else {
-                                banner.className = "estado-denegado";
-                                banner.innerHTML = `❌ ACCESO DENEGADO<br>${ultimo.usuario || 'Tarjeta No Registrada'}`;
-                            }
-                        } else if (data.chapa_abierta && data.tiempo_restante > 0) {
-                            banner.className = "estado-espera";
-                            banner.innerHTML = `⏳ ABRIENDO PUERTA (${data.tiempo_restante}s)`;
-                        } else {
-                            banner.className = "estado-listo";
-                            banner.innerHTML = "✅ TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO";
-                        }
-
-                        // Sincronizar abajo la información de la tarjeta o usuario
-                        document.getElementById('u-nombre').innerText = ultimo.usuario || "Desconocido";
-                        document.getElementById('u-meta').innerText = `UID: ${ultimo.uid || 'N/A'} | ${ultimo.fecha_hora}`;
-                        
-                        const badge = document.getElementById('u-badge');
-                        if (ultimo.estado === "PERMITIDO") {
-                            badge.className = "badge-estado badge-ok";
-                            badge.innerText = "ACEPTADO";
-                        } else {
-                            badge.className = "badge-estado badge-fail";
-                            badge.innerText = "DENEGADO";
-                        }
-
-                        if (ultimo.foto_biometria) {
-                            document.getElementById('u-avatar').src = `/${ultimo.foto_biometria}`;
-                        }
-                    } else {
-                        banner.className = "estado-listo";
-                        banner.innerHTML = "✅ TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO";
-                    }
-                })
+                .then(renderizarEstado)
                 .catch(err => console.error(err));
         }
 
         activarCamaraManual();
         setInterval(actualizarReloj, 1000);
-        setInterval(actualizarEstado, 300); // Lee los logs cada 300 milisegundos para cero retraso
+        setInterval(actualizarEstado, 500);
         actualizarReloj();
         actualizarEstado();
     </script>
