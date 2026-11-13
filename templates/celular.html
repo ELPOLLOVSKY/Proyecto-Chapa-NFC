@@ -74,56 +74,65 @@
             position: absolute;
             top: 8px;
             left: 8px;
+            right: 8px;
             font-size: 0.75rem;
             color: #00ff88;
             background: rgba(0, 0, 0, 0.6);
-            padding: 2px 8px;
+            padding: 3px 8px;
             border-radius: 10px;
             z-index: 10;
+            text-align: center;
         }
 
-        /* BANNER DE ESTADO */
+        /* BANNER PEQUEÑO EN ESPERA */
         #banner-estado {
             width: 100%;
             max-width: 400px;
-            padding: 14px;
+            padding: 12px;
             border-radius: 10px;
             text-align: center;
-            transition: background-color 0.2s ease;
+            border: 2px solid #333;
+            background: #1a1a1a;
+            color: #bbb;
         }
-        #b-titulo { font-size: 1.05rem; font-weight: bold; }
-        .estado-ok { background-color: #1b5e20; color: #a5d6a7; border: 2px solid #4caf50; }
-        .estado-espera { background-color: #e65100; color: #ffe0b2; border: 2px solid #ff9800; }
-        .estado-denegado { background-color: #b71c1c; color: #ffcdd2; border: 2px solid #f44336; }
-        .estado-inactivo { background-color: #1a1a1a; color: #bbb; border: 2px solid #333; }
 
-        #b-detalle {
+        /* PANTALLA COMPLETA DEL ACCESO */
+        #pantalla-acceso {
             display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            flex-direction: column;
             align-items: center;
-            gap: 14px;
-            margin-top: 12px;
-            text-align: left;
-            color: #fff;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+            gap: 12px;
         }
-        #b-foto, #b-foto-vacia {
-            width: 96px;
-            height: 96px;
+        #pantalla-acceso.visible { display: flex; }
+        .acceso-ok { background: #1b5e20; color: #e8f5e9; }
+        .acceso-denegado { background: #b71c1c; color: #ffebee; }
+        #p-titulo { font-size: 2rem; font-weight: bold; }
+        #p-motivo { font-size: 1.2rem; font-weight: bold; min-height: 1.4em; }
+        #p-foto, #p-foto-vacia {
+            width: min(60vmin, 320px);
+            height: min(60vmin, 320px);
             border-radius: 50%;
+            border: 6px solid #fff;
             flex-shrink: 0;
-            border: 3px solid #fff;
         }
-        #b-foto { object-fit: cover; display: none; background: #333; }
-        #b-foto-vacia {
+        #p-foto { object-fit: cover; display: none; background: #333; }
+        #p-foto-vacia {
             display: none;
             align-items: center;
             justify-content: center;
             background: #333;
-            font-size: 2rem;
+            font-size: 6rem;
         }
-        .b-texto { overflow: hidden; }
-        #b-nombre { display: block; font-size: 1.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        #b-uid { display: block; font-size: 0.9rem; color: #ddd; margin-top: 4px; font-family: monospace; }
-        #b-hora { display: block; font-size: 0.75rem; color: #aaa; margin-top: 2px; }
+        #p-nombre { font-size: 2.6rem; font-weight: bold; overflow-wrap: anywhere; }
+        #p-uid { font-size: 1.4rem; font-family: monospace; }
+        #p-hora { font-size: 1rem; opacity: 0.85; }
+        #p-puerta { font-size: 1.6rem; font-weight: bold; color: #fff; }
     </style>
 </head>
 <body>
@@ -137,21 +146,22 @@
     <div class="terminal-screen">
         <video id="webcam" autoplay playsinline muted></video>
         <div class="face-frame"></div>
-        <div id="escaneo">● Escaneo facial</div>
+        <div id="escaneo">● Iniciando cámara...</div>
         <button class="btn-accion" onclick="activarCamaraManual()">📷 Activar Cámara</button>
     </div>
 
-    <div id="banner-estado" class="estado-inactivo">
-        <div id="b-titulo">TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO</div>
-        <div id="b-detalle">
-            <img id="b-foto" alt="Rostro">
-            <div id="b-foto-vacia">👤</div>
-            <div class="b-texto">
-                <b id="b-nombre">-</b>
-                <span id="b-uid">-</span>
-                <span id="b-hora"></span>
-            </div>
-        </div>
+    <div id="banner-estado">TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO</div>
+
+    <!-- PANTALLA COMPLETA DEL RESULTADO -->
+    <div id="pantalla-acceso">
+        <div id="p-titulo"></div>
+        <div id="p-motivo"></div>
+        <img id="p-foto" alt="Rostro">
+        <div id="p-foto-vacia">👤</div>
+        <div id="p-nombre"></div>
+        <div id="p-uid"></div>
+        <div id="p-puerta"></div>
+        <div id="p-hora"></div>
     </div>
 
     <script>
@@ -165,28 +175,30 @@
         const INTERVALO_ESCANEO_MS = 1200;
         const ANCHO_ESCANEO = 320;   // se envía una imagen chica: basta para reconocer la cara
         let avisoCamara = null;
-        let fotoActual = null;
         let escaneoIniciado = false;
         let pausaHasta = 0;          // después de un resultado, se espera antes del siguiente escaneo
+        let mostrandoAcceso = false; // mientras el resultado ocupa la pantalla, no se escanea
+        let fotoActual = null;
+        let ultimoEventoMostrado = null;
 
-        function pintarBanner(clase, titulo, datos) {
-            const banner = document.getElementById('banner-estado');
-            banner.className = clase;
-            document.getElementById('b-titulo').innerText = titulo;
+        // ----- Texto de estado del escaneo (para saber en qué paso se corta) -----
+        function estadoEscaneo(texto) {
+            document.getElementById('escaneo').innerText = texto;
+        }
 
-            const detalle = document.getElementById('b-detalle');
-            if (!datos) {
-                detalle.style.display = 'none';
-                return;
-            }
-            detalle.style.display = 'flex';
-            document.getElementById('b-nombre').innerText = datos.usuario || 'Desconocido';
-            document.getElementById('b-uid').innerText = datos.uid ? `Tarjeta: ${datos.uid}` : 'Sin tarjeta asociada';
-            document.getElementById('b-hora').innerText = datos.fecha_hora || '';
+        // ----- Resultado a pantalla completa -----
+        function mostrarAcceso(clase, titulo, motivo, datos, puerta) {
+            const pantalla = document.getElementById('pantalla-acceso');
+            pantalla.className = clase + ' visible';
+            document.getElementById('p-titulo').innerText = titulo;
+            document.getElementById('p-motivo').innerText = motivo || '';
+            document.getElementById('p-nombre').innerText = datos.usuario || 'Desconocido';
+            document.getElementById('p-uid').innerText = datos.uid ? `Tarjeta: ${datos.uid}` : 'Sin tarjeta asociada';
+            document.getElementById('p-hora').innerText = datos.fecha_hora || '';
+            document.getElementById('p-puerta').innerText = puerta || '';
 
-            // Cambiar la foto solo si corresponde a otra persona (evita parpadeo en cada consulta)
-            const foto = document.getElementById('b-foto');
-            const fotoVacia = document.getElementById('b-foto-vacia');
+            const foto = document.getElementById('p-foto');
+            const fotoVacia = document.getElementById('p-foto-vacia');
             if (datos.foto_url && datos.foto_url !== fotoActual) {
                 fotoActual = datos.foto_url;
                 foto.src = datos.foto_url;
@@ -195,22 +207,26 @@
             fotoVacia.style.display = datos.foto_url ? 'none' : 'flex';
         }
 
+        function ocultarAcceso() {
+            document.getElementById('pantalla-acceso').className = '';
+        }
+
         function renderizarEstado(data) {
             const u = data.ultimo;
             const reciente = u && u.hace_segundos < MOSTRAR_EVENTO_SEGUNDOS;
+            mostrandoAcceso = Boolean(reciente);
 
             if (reciente && u.estado === 'PERMITIDO') {
-                const titulo = data.chapa_abierta
-                    ? `🔓 ACCESO AUTORIZADO · PUERTA ABIERTA (${data.tiempo_restante}s)`
-                    : '🔓 ACCESO AUTORIZADO';
-                pintarBanner('estado-ok', titulo, u);
+                const puerta = data.chapa_abierta ? `PUERTA ABIERTA · ${data.tiempo_restante}s` : '';
+                mostrarAcceso('acceso-ok', '🔓 ACCESO AUTORIZADO', 'Bienvenido', u, puerta);
+                pausaHasta = Math.max(pausaHasta, Date.now() + 1000);
             } else if (reciente) {
                 const motivo = MOTIVOS[u.detalle] || 'DENEGADO';
-                pintarBanner('estado-denegado', `❌ ACCESO DENEGADO · ${motivo}`, u);
-            } else if (avisoCamara) {
-                pintarBanner('estado-espera', avisoCamara, null);
+                mostrarAcceso('acceso-denegado', '❌ ACCESO DENEGADO', motivo, u, '');
             } else {
-                pintarBanner('estado-inactivo', 'TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO', null);
+                ocultarAcceso();
+                const banner = document.getElementById('banner-estado');
+                banner.innerText = avisoCamara || 'TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO';
             }
         }
 
@@ -219,32 +235,44 @@
             // En el celular, el navegador bloquea la cámara si la página no es HTTPS
             if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 avisoCamara = '⚠️ Cámara bloqueada: abre la página con https:// y acepta el certificado';
+                estadoEscaneo('⚠️ Cámara bloqueada (usa https)');
                 return;
             }
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: "user" }, audio: false
                 });
-                document.getElementById('webcam').srcObject = stream;
+                const video = document.getElementById('webcam');
+                video.srcObject = stream;
+                await video.play().catch(() => {});
                 avisoCamara = null;
+                estadoEscaneo('● Buscando rostro...');
                 if (!escaneoIniciado) {
                     escaneoIniciado = true;
                     escanearRostroAuto();
                 }
             } catch (err) {
                 avisoCamara = `⚠️ No se pudo abrir la cámara (${err.name})`;
+                estadoEscaneo(`⚠️ Cámara: ${err.name}. Toca "Activar Cámara"`);
             }
         }
 
         // ----- Escaneo facial automático (sin botones) -----
         async function escanearRostroAuto() {
             const video = document.getElementById('webcam');
-            if (video.videoWidth && Date.now() >= pausaHasta) {
+            if (mostrandoAcceso) {
+                // El resultado está en pantalla: no se escanea ni se vuelve a abrir la chapa
+            } else if (Date.now() < pausaHasta) {
+                // esperando después del último resultado
+            } else if (!video.videoWidth) {
+                estadoEscaneo('⚠️ La cámara no entrega imagen');
+            } else {
                 const escala = ANCHO_ESCANEO / video.videoWidth;
                 const canvas = document.createElement('canvas');
                 canvas.width = ANCHO_ESCANEO;
                 canvas.height = Math.round(video.videoHeight * escala);
                 canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                estadoEscaneo('● Analizando rostro...');
                 try {
                     const r = await fetch('/api/verificar_rostro', {
                         method: 'POST',
@@ -253,14 +281,18 @@
                     }).then(res => res.json());
 
                     if (r.success) {
-                        pausaHasta = Date.now() + 6000;      // ya autorizado: no volver a abrir enseguida
+                        estadoEscaneo('✅ ' + r.mensaje);
+                        pausaHasta = Date.now() + 6000;
                     } else if (r.sin_rostro) {
-                        pausaHasta = 0;                      // nadie frente a la cámara: seguir revisando
+                        estadoEscaneo('● Buscando rostro...');
+                        pausaHasta = 0;
                     } else {
-                        pausaHasta = Date.now() + 2500;      // rostro no reconocido: pausa corta
+                        estadoEscaneo('❌ ' + (r.mensaje || 'Rostro no reconocido'));
+                        pausaHasta = Date.now() + 2500;
                     }
                 } catch (err) {
-                    pausaHasta = Date.now() + 3000;          // sin conexión: esperar y reintentar
+                    estadoEscaneo('⚠️ Sin conexión con el servidor. Reintentando...');
+                    pausaHasta = Date.now() + 3000;
                 }
             }
             setTimeout(escanearRostroAuto, INTERVALO_ESCANEO_MS);
