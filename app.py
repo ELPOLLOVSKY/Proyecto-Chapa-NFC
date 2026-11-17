@@ -55,15 +55,66 @@ _cache_rasgos = {}  # uid -> (mtime de la foto, rasgos faciales)
 # ---------------------------------------------------------------------------
 # Utilidades generales
 # ---------------------------------------------------------------------------
-def obtener_ip_local():
+def _ip_hacia(destino):
+    """IP que el sistema usaría para llegar a 'destino' (no envía nada)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
+        s.connect((destino, 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
     except Exception:
-        return "127.0.0.1"
+        return None
+
+
+def _es_red_local(ip):
+    """Solo redes privadas (Wi‑Fi de casa, hotspot). Descarta 127.x y 169.254.x (sin red)."""
+    if not ip or ip.startswith(("127.", "169.254.")):
+        return False
+    partes = ip.split(".")
+    if len(partes) != 4:
+        return False
+    a, b = int(partes[0]), int(partes[1])
+    return a == 10 or (a == 192 and b == 168) or (a == 172 and 16 <= b <= 31)
+
+
+def obtener_ip_local():
+    """IP de la red local que usará el celular.
+    1) Si existe 'ip_celular.txt' con una IP, se usa esa (sirve para VPN o adaptadores virtuales).
+    2) Si no, busca una IP privada en las interfaces (funciona aunque el Wi‑Fi no tenga internet)."""
+    ruta_fija = os.path.join(BASE_DIR, "ip_celular.txt")
+    if os.path.exists(ruta_fija):
+        try:
+            with open(ruta_fija, encoding="utf-8") as f:
+                fijada = f.read().strip()
+            if fijada:
+                return fijada
+        except OSError:
+            pass
+
+    candidatas = []
+    for destino in ("192.168.1.1", "10.0.0.1", "8.8.8.8"):
+        ip = _ip_hacia(destino)
+        if ip:
+            candidatas.append(ip)
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            candidatas.append(info[4][0])
+    except OSError:
+        pass
+
+    # Prioridad: 192.168.x (Wi‑Fi casero) > 10.x > 172.16-31 (suele ser Docker/WSL/virtual)
+    def prioridad(ip):
+        if ip.startswith("192.168."):
+            return 0
+        if ip.startswith("10."):
+            return 1
+        return 2
+
+    locales = [ip for ip in candidatas if _es_red_local(ip)]
+    if locales:
+        return min(locales, key=prioridad)
+    return "127.0.0.1"
 
 
 def puerto_ocupado(puerto=PUERTO):
