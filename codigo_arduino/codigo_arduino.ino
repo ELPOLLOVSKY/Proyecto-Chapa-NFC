@@ -25,6 +25,7 @@ unsigned long ultimoChequeoLector = 0;
 unsigned long ultimoLatido = 0;
 unsigned long ultimaApertura = 0;
 bool hayApertura = false;
+bool rfidConectado = false;  // true mientras el módulo RC522 responde
 
 // Nunca espera al PC: si el buffer de salida está lleno, el mensaje se descarta
 void enviarLinea(const String &s) {
@@ -62,6 +63,12 @@ void abrirChapa() {
   enviarLinea("RESET_CONEXION");
 }
 
+// Un módulo ausente o mal conectado devuelve 0x00 o 0xFF en la versión
+bool moduloRfidResponde() {
+  byte version = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+  return version != 0x00 && version != 0xFF;
+}
+
 void setup() {
   // Blindaje Active Low al encender
   digitalWrite(PIN_SENAL_CHAPA, HIGH);
@@ -73,6 +80,7 @@ void setup() {
   Serial.begin(9600);
   SPI.begin();
   rfid.PCD_Init();
+  rfidConectado = moduloRfidResponde();
 
   // Si el microcontrolador se cuelga, se reinicia solo en 4 s
   wdt_enable(WDTO_4S);
@@ -83,7 +91,7 @@ void loop() {
 
   if (millis() - ultimoLatido >= MS_LATIDO) {
     ultimoLatido = millis();
-    enviarLinea("LIVE");
+    enviarLinea(rfidConectado ? "LIVE:RFID_OK" : "LIVE:RFID_NO");
   }
 
   if (modoDebugActivo) {
@@ -132,12 +140,17 @@ void loop() {
     }
   }
 
-  // Cada 5 s se revisa que el MFRC522 responda; si se cuelga, se reinicia solo
+  // Cada 5 s se revisa que el MFRC522 responda; si se cuelga, se reinicia solo.
+  // Si el módulo no está conectado, se avisa al PC (solo cuando cambia).
   if (millis() - ultimoChequeoLector >= 5000) {
     ultimoChequeoLector = millis();
-    byte version = rfid.PCD_ReadRegister(MFRC522::VersionReg);
-    if (version == 0x00 || version == 0xFF) {
+    bool ok = moduloRfidResponde();
+    if (!ok) {
       rfid.PCD_Init();
+    }
+    if (ok != rfidConectado) {
+      rfidConectado = ok;
+      enviarLinea(ok ? "RFID_OK" : "RFID_NO_CONECTADO");
     }
   }
 

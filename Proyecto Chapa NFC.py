@@ -76,6 +76,25 @@ def ultimas_lineas_log_web(n=15):
     except OSError:
         return "(no se pudo leer web_app.log)"
 
+_estado_nfc = None
+
+def _informar_estado_nfc(linea):
+    """El Arduino avisa si el módulo NFC responde. Solo muestra un aviso cuando cambia."""
+    global _estado_nfc
+    if linea.startswith("LIVE:"):
+        ok = linea.endswith("RFID_OK")
+    elif linea in ("RFID_OK", "RFID_NO_CONECTADO"):
+        ok = linea == "RFID_OK"
+    else:
+        return  # latido antiguo sin estado del módulo
+    if ok != _estado_nfc:
+        _estado_nfc = ok
+        if ok:
+            print("\n📡 Módulo NFC conectado y respondiendo.\n")
+        else:
+            print("\n❌ MÓDULO NFC NO DETECTADO. Revisa los cables del RC522: "
+                  "3.3V, GND, SDA/SS pin 10, SCK pin 13, MOSI pin 11, MISO pin 12, RST pin 9.\n")
+
 def vigilar_servidor_web():
     """Si el servidor web (app.py) se cerró, lo vuelve a levantar con esperas crecientes.
     Muestra el final de web_app.log para ver el error real."""
@@ -998,9 +1017,10 @@ def main():
                     except Exception:
                         linea = ""
                     
-                    if linea == "LIVE":
-                        con_latido = True
+                    if linea.startswith("LIVE") or linea in ("RFID_OK", "RFID_NO_CONECTADO"):
+                        con_latido = con_latido or linea.startswith("LIVE")
                         ultimo_dato = time.time()
+                        _informar_estado_nfc(linea)
                     elif linea.startswith("CARD:"):
                         uid = linea.split(":")[1].upper()
                         guardar_ultima_tarjeta(uid)  # para que el panel pueda tomar la tarjeta escaneada
