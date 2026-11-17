@@ -47,6 +47,10 @@ os.makedirs(CARPETA_ROSTROS, exist_ok=True)
 from sincronizacion_firebase import Sincronizacion  # noqa: E402
 sync = Sincronizacion(URL_FIREBASE)
 
+from cola_nube import ColaNube  # noqa: E402
+# Cambios de usuarios hechos sin conexión: se guardan aquí y se suben al volver Firebase
+cola_nube_app = ColaNube(os.path.join(BASE_DIR, "pendientes_nube_app.json"), URL_FIREBASE)
+
 _detector = None
 _reconocedor = None
 _cache_rasgos = {}  # uid -> (mtime de la foto, rasgos faciales)
@@ -165,11 +169,8 @@ def ruta_foto(uid):
 
 
 def sincronizar_firebase(metodo, ruta, cuerpo=None):
-    """Replica un cambio en la nube. Si no hay conexión, se ignora (queda el respaldo local)."""
-    try:
-        requests.request(metodo, f"{URL_FIREBASE}{ruta}", json=cuerpo, timeout=2.5)
-    except Exception:
-        pass
+    """Replica un cambio en la nube. Si no hay conexión, queda pendiente y se sube después."""
+    cola_nube_app.enviar(metodo, ruta, cuerpo)
 
 
 def leer_logs():
@@ -336,6 +337,7 @@ def calcular_estado():
         "dispositivos": sync.estado_dispositivos(),
         "firebase_ok": sync.ultimo_error is None,
         "latencia_firebase_ms": sync.latencia_ms,
+        "pendientes_nube": cola_nube_app.pendientes(),
     }
 
 
@@ -364,9 +366,13 @@ def bucle_firebase():
                 sync.latir(obtener_ip_local())
                 t_latido = ahora
             if ahora - t_usuarios >= 5:
-                usuarios, cambio = sync.pull_usuarios(cargar_usuarios_locales())
-                if cambio:
-                    guardar_usuarios_locales(usuarios)
+                # Primero se suben los cambios hechos sin conexión (así un usuario borrado
+                # sin conexión no vuelve a aparecer al traer los datos de Firebase)
+                cola_nube_app.vaciar()
+                if cola_nube_app.pendientes() == 0:
+                    usuarios, cambio = sync.pull_usuarios(cargar_usuarios_locales())
+                    if cambio:
+                        guardar_usuarios_locales(usuarios)
                 t_usuarios = ahora
             if ahora - t_dispositivos >= 2:
                 ok, datos = sync._req("GET", "/dispositivos.json")

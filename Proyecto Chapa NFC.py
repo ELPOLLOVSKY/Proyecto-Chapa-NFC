@@ -11,6 +11,7 @@ import requests
 import subprocess
 import sys
 import threading
+from cola_nube import ColaNube
 
 # =========================================================================
 # CONFIGURACIÓN DE FIREBASE Y ARCHIVOS LOCALES
@@ -29,6 +30,11 @@ def obtener_ruta_base():
         return os.path.dirname(os.path.abspath(__file__))
 
 RUTA_BASE = obtener_ruta_base()
+
+# Registros de acceso que no llegaron a Firebase (se reenvían al volver la conexión)
+cola_nube_motor = ColaNube(os.path.join(RUTA_BASE, "pendientes_nube_motor.json"), URL_BASE)
+# Cambios de usuarios pendientes en la app web: si existen, no se pisan con los datos de la nube
+RUTA_COLA_APP = os.path.join(RUTA_BASE, "pendientes_nube_app.json")
 ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
 ARCHIVO_JSON_USUARIOS = os.path.join(RUTA_BASE, "usuarios_locales.json")
 ARCHIVO_COLA_DEBUG = os.path.join(RUTA_BASE, "cola_debug.json")
@@ -227,7 +233,10 @@ def obtener_usuarios_hibrido():
             data = response.json()
             if data is None:
                 data = {}
-            guardar_usuarios_locales(data)
+            if ColaNube(RUTA_COLA_APP, URL_BASE).pendientes() == 0:
+                guardar_usuarios_locales(data)
+            else:
+                data = cargar_usuarios_locales()  # hay cambios locales sin subir: no se pisan
             return data, True
     except Exception:
         pass
@@ -271,10 +280,16 @@ def _refrescar_cache_usuarios():
             pass
 
 def _enviar_log_nube(log_data):
-    try:
-        requests.post(f"{URL_BASE}/logs.json", json=log_data, timeout=2.5)
-    except Exception:
-        pass
+    # Si no hay conexión, el registro queda pendiente y se reenvía después
+    cola_nube_motor.enviar("POST", "/logs.json", log_data)
+
+def _vaciar_cola_motor():
+    while True:
+        time.sleep(10)
+        try:
+            cola_nube_motor.vaciar()
+        except Exception:
+            pass
 
 def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
     global cant_permitidos, cant_denegados
@@ -941,6 +956,7 @@ def main():
     animar_carga_hasta(75, "Descargando base de usuarios autorizados...", pasitos=10, demora=0.01)
     _actualizar_cache_usuarios()
     threading.Thread(target=_refrescar_cache_usuarios, daemon=True).start()
+    threading.Thread(target=_vaciar_cola_motor, daemon=True).start()
     animar_carga_hasta(90, "Inicializando motor de voz sintetizada...", pasitos=6, demora=0.01)
     animar_carga_hasta(100, "¡Sistema cargado con éxito!", pasitos=5, demora=0.01)
     time.sleep(0.3)
