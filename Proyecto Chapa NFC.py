@@ -60,14 +60,32 @@ def iniciar_servidor_web_automatico():
         except Exception as e:
             print(f"⚠️ No se pudo iniciar el servidor web: {e}")
 
+_espera_web = 5
+_fallos_web = 0
+
+def ultimas_lineas_log_web(n=15):
+    try:
+        with open(os.path.join(RUTA_BASE, "web_app.log"), encoding="utf-8", errors="ignore") as f:
+            return "".join(f.readlines()[-n:])
+    except OSError:
+        return "(no se pudo leer web_app.log)"
+
 def vigilar_servidor_web():
-    """Si el servidor web (app.py) se cerró, lo vuelve a levantar."""
-    global _ultimo_intento_web
+    """Si el servidor web (app.py) se cerró, lo vuelve a levantar con esperas crecientes.
+    Muestra el final de web_app.log para ver el error real."""
+    global _ultimo_intento_web, _espera_web, _fallos_web
     if _proceso_web is None or _proceso_web.poll() is None:
+        if _proceso_web is not None and _fallos_web and time.time() - _ultimo_intento_web > 60:
+            _fallos_web = 0
+            _espera_web = 5
         return
-    if time.time() - _ultimo_intento_web < 5:
+    if time.time() - _ultimo_intento_web < _espera_web:
         return
-    print(f"\n⚠️ El servidor web se cerró (código {_proceso_web.returncode}). Reiniciando...")
+    _fallos_web += 1
+    print(f"\n⚠️ El servidor web se cerró (código {_proceso_web.returncode}), intento {_fallos_web}.")
+    print("   Últimas líneas de web_app.log:")
+    print(ultimas_lineas_log_web())
+    _espera_web = min(60, 5 * _fallos_web)
     _ultimo_intento_web = time.time()
     iniciar_servidor_web_automatico()
 
