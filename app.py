@@ -7,6 +7,7 @@ import time
 import base64
 import socket
 import threading
+import traceback
 import requests
 import qrcode
 from datetime import datetime
@@ -382,6 +383,7 @@ def bucle_firebase():
             sync.procesar_eventos(decidir_tarjeta, registrar_tarjeta)
         except Exception as e:
             print(f"⚠️ Sincronización Firebase: {e}")
+            traceback.print_exc()  # línea exacta del error, para diagnóstico
         time.sleep(0.8)
 
 
