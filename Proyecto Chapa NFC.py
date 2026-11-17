@@ -951,15 +951,23 @@ def main():
                 print("=========================================================")
                 time.sleep(2)
 
+        ultimo_dato = time.time()
+        con_latido = False  # pasa a True cuando el Arduino envía LIVE
         while True:
             try:
+                if con_latido and time.time() - ultimo_dato > 20:
+                    raise serial.SerialException("el lector no envía señal hace más de 20 s")
                 if ser.in_waiting > 0:
+                    ultimo_dato = time.time()
                     try:
                         linea = ser.readline().decode('utf-8', errors='ignore').strip()
                     except Exception:
                         linea = ""
                     
-                    if linea.startswith("CARD:"):
+                    if linea == "LIVE":
+                        con_latido = True
+                        ultimo_dato = time.time()
+                    elif linea.startswith("CARD:"):
                         uid = linea.split(":")[1].upper()
                         guardar_ultima_tarjeta(uid)  # para que el panel pueda tomar la tarjeta escaneada
                         if es_lectura_repetida(uid):
@@ -1013,6 +1021,7 @@ def main():
                 tecla = capturar_tecla_instantanea()
                 if tecla == TECLA_MENU_OCULTO:
                     menu_administrador(ser)
+                    ultimo_dato = time.time()
                     imprimir_encabezado_escucha()
 
                 time.sleep(0.02)
