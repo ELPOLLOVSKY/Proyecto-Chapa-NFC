@@ -8,12 +8,19 @@
     <style>
         #tabla-usuarios tr[data-uid] { cursor: pointer; }
         #tabla-usuarios tr.seleccionada { outline: 2px solid #0dcaf0; }
+        .foto-clic { cursor: pointer; }
+        .foto-clic:hover { outline: 2px solid #0dcaf0; border-radius: 50%; }
+        #modal-foto { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center; z-index: 1000; }
+        #modal-foto.visible { display: flex; }
+        #modal-foto .caja { background: #2b2b2b; padding: 20px; border-radius: 12px; text-align: center; max-width: 90vw; }
+        #modal-foto img { max-width: 70vw; max-height: 70vh; border-radius: 10px; background: #000; }
+        #modal-foto .sin-foto { padding: 60px 30px; font-size: 1.2rem; }
     </style>
 </head>
 <body class="bg-dark text-light">
     <div class="container py-4">
         <header class="pb-3 mb-4 border-bottom d-flex align-items-center justify-content-between">
-            <h2>🚪 Monitor de Accesos NFC <span id="conexion" class="small text-secondary">● CONECTANDO</span></h2>
+            <h2>🚪 Monitor de Accesos NFC <span id="conexion" class="small text-secondary">● CONECTANDO</span> <span id="firebase" class="small text-secondary ms-2"></span></h2>
             <a href="/celular" target="_blank" class="btn btn-outline-info btn-sm">📱 Abrir Vista Celular</a>
         </header>
 
@@ -75,6 +82,16 @@
                     </div>
                 </div>
 
+                <div class="card bg-secondary text-light shadow-sm mb-4">
+                    <div class="card-header bg-dark fw-bold">🖥️ Equipos conectados</div>
+                    <div class="card-body p-0">
+                        <table class="table table-dark table-sm mb-0">
+                            <thead><tr><th>Equipo</th><th>Tipo</th><th>Estado</th><th>Latencia</th><th>IP</th><th>USB</th></tr></thead>
+                            <tbody id="tabla-equipos"><tr><td colspan="6" class="text-secondary">Esperando datos...</td></tr></tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="card bg-secondary text-light shadow-sm">
                     <div class="card-header bg-dark fw-bold">🎴 Usuarios Registrados <span class="small text-secondary">(haz clic para seleccionar)</span></div>
                     <div class="card-body p-0" style="max-height: 300px; overflow-y: auto;">
@@ -87,6 +104,15 @@
             </div>
         </div>
     </div>
+    <div id="modal-foto" onclick="cerrarFoto()">
+        <div class="caja" onclick="event.stopPropagation()">
+            <h5 id="modal-nombre" class="mb-3"></h5>
+            <img id="modal-img" alt="Rostro">
+            <div id="modal-sin" class="sin-foto d-none">Sin foto de rostro registrada</div>
+            <div class="mt-3"><button class="btn btn-outline-light btn-sm" onclick="cerrarFoto()">Cerrar</button></div>
+        </div>
+    </div>
+
     <script>
         let streamAdmin = null;
         let usuarioSeleccionado = null;   // uid de un usuario existente elegido en la lista
@@ -115,12 +141,13 @@
         }
 
         function renderizar(data) {
+            renderizarEquipos(data);
             const tbody = document.getElementById('tabla-logs');
             tbody.innerHTML = data.logs.map(l => {
                 const color = l.estado === 'PERMITIDO' ? 'text-success fw-bold' : 'text-danger fw-bold';
                 const hora = (l.fecha_hora || '').split(' ')[1] || '';
                 return `<tr><td>${escapar(hora)}</td><td class="${color}">${escapar(l.estado)}</td>` +
-                       `<td>${escapar(l.usuario)}</td><td><code>${escapar(l.uid)}</code></td>` +
+                       `<td>${escapar(l.usuario)}</td><td>${l.uid ? `<code class="foto-clic" data-uid="${escapar(l.uid)}" data-nombre="${escapar(l.usuario)}">${escapar(l.uid)}</code>` : '—'}</td>` +
                        `<td>${escapar(l.detalle)}</td></tr>`;
             }).join('');
 
@@ -131,10 +158,60 @@
                 ultimosUsuarios[uid] = nombre;
                 const clase = uid === usuarioSeleccionado ? ' class="seleccionada"' : '';
                 return `<tr data-uid="${escapar(uid)}"${clase}><td>${escapar(nombre)}</td><td><code>${escapar(uid)}</code></td>` +
-                       `<td><img src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" class="rounded-circle" style="object-fit:cover" onerror="this.replaceWith('—')"></td>` +
+                       `<td><img class="foto-clic rounded-circle" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}" src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" style="object-fit:cover" onerror="this.outerHTML='<span class=&quot;foto-clic text-secondary&quot; data-uid=&quot;${escapar(uid)}&quot; data-nombre=&quot;${escapar(nombre)}&quot;>sin foto</span>'"></td>` +
                        `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="event.stopPropagation(); eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
             }).join('');
         }
+
+        // ----- Equipos: estado, latencia e IP -----
+        function renderizarEquipos(data) {
+            const tbody = document.getElementById('tabla-equipos');
+            const equipos = data.dispositivos || [];
+            const fb = document.getElementById('firebase');
+            if (data.firebase_ok !== undefined) {
+                fb.innerText = data.firebase_ok
+                    ? `Firebase: ● ${data.latencia_firebase_ms != null ? data.latencia_firebase_ms + ' ms' : 'OK'}`
+                    : 'Firebase: ● SIN CONEXIÓN';
+                fb.className = 'small ms-2 ' + (data.firebase_ok ? 'text-success' : 'text-danger');
+            }
+            if (!equipos.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-secondary">Sin equipos registrados todavía</td></tr>';
+                return;
+            }
+            tbody.innerHTML = equipos.map(e => {
+                const estado = e.en_linea
+                    ? '<span class="text-success fw-bold">● EN LÍNEA</span>'
+                    : `<span class="text-danger fw-bold">● SIN CONEXIÓN</span> <span class="small text-secondary">(hace ${e.visto_hace_s}s)</span>`;
+                const lat = e.latencia_ms != null ? `${e.latencia_ms} ms` : '—';
+                const usb = e.usb_conectado === true ? 'Sí' : e.usb_conectado === false ? 'No' : '—';
+                return `<tr><td>${escapar(e.nombre)}</td><td>${escapar(e.tipo)}</td><td>${estado}</td>` +
+                       `<td>${escapar(lat)}</td><td><code>${escapar(e.ip)}</code></td><td>${usb}</td></tr>`;
+            }).join('');
+        }
+
+        // ----- Foto al hacer clic en una cara -----
+        function abrirFoto(uid, nombre) {
+            document.getElementById('modal-nombre').innerText = `${nombre || 'Usuario'} · ${uid}`;
+            const img = document.getElementById('modal-img');
+            const sin = document.getElementById('modal-sin');
+            img.onerror = () => { img.style.display = 'none'; sin.classList.remove('d-none'); };
+            img.onload = () => { img.style.display = ''; sin.classList.add('d-none'); };
+            img.src = `/rostros_usuarios/${encodeURIComponent(uid)}.jpg?t=${Date.now()}`;
+            document.getElementById('modal-foto').classList.add('visible');
+        }
+
+        function cerrarFoto() {
+            document.getElementById('modal-foto').classList.remove('visible');
+        }
+
+        document.addEventListener('click', (e) => {
+            const el = e.target.closest('.foto-clic');
+            if (el && el.dataset.uid) {
+                e.stopPropagation();
+                abrirFoto(el.dataset.uid, el.dataset.nombre);
+            }
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarFoto(); });
 
         function conectarTiempoReal() {
             const fuente = new EventSource('/api/stream');

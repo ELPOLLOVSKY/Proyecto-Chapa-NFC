@@ -44,6 +44,9 @@ SEGUNDOS_ENVIO_ESTADO = 1.0  # Aunque no cambie nada, se reenvía el estado cada
 
 os.makedirs(CARPETA_ROSTROS, exist_ok=True)
 
+from sincronizacion_firebase import Sincronizacion  # noqa: E402
+sync = Sincronizacion(URL_FIREBASE)
+
 _detector = None
 _reconocedor = None
 _cache_rasgos = {}  # uid -> (mtime de la foto, rasgos faciales)
@@ -123,6 +126,7 @@ def leer_logs():
         try:
             with open(ARCHIVO_CSV_LOGS, mode='r', encoding='utf-8', errors='ignore') as f:
                 for row in csv.DictReader(f, fieldnames=CAMPOS_LOG):
+                    row.pop(None, None)  # columnas de más en una fila mal escrita
                     if not row.get("timestamp") or row.get("fecha_hora") == "fecha_hora":
                         continue  # fila vacía o cabecera repetida
                     logs.append(row)
@@ -276,7 +280,50 @@ def calcular_estado():
         "ultimo": ultimo,
         "chapa_abierta": chapa_abierta,
         "tiempo_restante": tiempo_restante,
+        "dispositivos": sync.estado_dispositivos(),
+        "firebase_ok": sync.ultimo_error is None,
+        "latencia_firebase_ms": sync.latencia_ms,
     }
+
+
+def decidir_tarjeta(uid):
+    """Lo usa la sincronización para tarjetas leídas por otros equipos (totem Android)."""
+    usuarios = cargar_usuarios_locales()
+    if uid in usuarios:
+        return True, nombre_de(usuarios[uid])
+    return False, "Desconocido"
+
+
+def registrar_tarjeta(uid, nombre, dispositivo, permitido):
+    if permitido:
+        registrar_log(uid, nombre, "PERMITIDO", f"TARJETA_{dispositivo.upper()}")
+    else:
+        registrar_log(uid, "Desconocido", "DENEGADO", "NO_REGISTRADO")
+
+
+def bucle_firebase():
+    """Latidos, sincronización de usuarios y lectura de tarjetas de otros equipos."""
+    t_latido = t_usuarios = t_dispositivos = 0.0
+    while True:
+        try:
+            ahora = time.time()
+            if ahora - t_latido >= 5:
+                sync.latir(obtener_ip_local())
+                t_latido = ahora
+            if ahora - t_usuarios >= 5:
+                usuarios, cambio = sync.pull_usuarios(cargar_usuarios_locales())
+                if cambio:
+                    guardar_usuarios_locales(usuarios)
+                t_usuarios = ahora
+            if ahora - t_dispositivos >= 2:
+                ok, datos = sync._req("GET", "/dispositivos.json")
+                if ok:
+                    sync.actualizar_visto(datos)
+                t_dispositivos = ahora
+            sync.procesar_eventos(decidir_tarjeta, registrar_tarjeta)
+        except Exception as e:
+            print(f"⚠️ Sincronización Firebase: {e}")
+        time.sleep(0.8)
 
 
 def marca_de_archivo(ruta):
@@ -514,6 +561,9 @@ if __name__ == '__main__':
     # HTTP en segundo plano para la computadora
     hilo_http = threading.Thread(target=iniciar_http_local, args=(ip_local,), daemon=True)
     hilo_http.start()
+
+    # Sincronización con Firebase (latidos, usuarios, tarjetas de otros equipos)
+    threading.Thread(target=bucle_firebase, daemon=True).start()
 
     if tiene_https:
         try:
