@@ -62,7 +62,7 @@ def iniciar_servidor_web_automatico():
             log_web = open(os.path.join(RUTA_BASE, "web_app.log"), "a", encoding="utf-8")
             log_web.write(f"\n--- Arranque {datetime.now()} ---\n")
             log_web.flush()
-            _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT)
+            _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         except Exception as e:
             print(f"⚠️ No se pudo iniciar el servidor web: {e}")
 

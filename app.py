@@ -23,6 +23,13 @@ except ImportError as _e:
     cv2 = None
     _ERROR_IMPORT_OPENCV = str(_e)
 
+# Salida en UTF-8 aunque se redirija a un archivo (en Windows, cp1252 no tiene emojis)
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
