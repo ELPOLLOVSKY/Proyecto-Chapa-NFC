@@ -12,6 +12,7 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 bool modoDebugActivo = false;
 unsigned long ultimoTiempoDebug = 0;
 bool estadoLedDebug = false;
+unsigned long ultimoChequeoLector = 0;
 
 void setup() {
   // Blindaje Active Low al encender
@@ -54,6 +55,9 @@ void loop() {
       digitalWrite(PIN_SENAL_CHAPA, HIGH);    
       digitalWrite(PIN_LED_PLACA, HIGH);    
       
+      // El pulso de la chapa puede dejar trabado al lector RFID: se reinicia
+      rfid.PCD_Init();
+
       // AVISO A PYTHON DE QUE TERMINÓ LA ACCIÓN PARA REINICIAR CONEXIÓN
       Serial.println("RESET_CONEXION");
       Serial.flush(); // Limpieza de búfer serial para evitar bloqueos
@@ -83,6 +87,15 @@ void loop() {
       modoDebugActivo = false;
       digitalWrite(PIN_SENAL_CHAPA, HIGH);
       digitalWrite(PIN_LED_PLACA, HIGH);
+    }
+  }
+
+  // Cada 5 s se revisa que el MFRC522 responda; si se cuelga, se reinicia solo
+  if (millis() - ultimoChequeoLector >= 5000) {
+    ultimoChequeoLector = millis();
+    byte version = rfid.PCD_ReadRegister(MFRC522::VersionReg);
+    if (version == 0x00 || version == 0xFF) {
+      rfid.PCD_Init();
     }
   }
 

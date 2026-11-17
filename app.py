@@ -531,6 +531,45 @@ def api_debug():
 PUERTO_HTTPS = 5443  # Para el celular (la cámara exige HTTPS fuera de localhost)
 
 
+def contexto_ssl_celular():
+    """Certificado autofirmado guardado en disco: se crea una sola vez.
+    Así el celular no tiene que aceptar una advertencia nueva en cada arranque."""
+    ruta_cert = os.path.join(BASE_DIR, "cert_celular.pem")
+    ruta_clave = os.path.join(BASE_DIR, "clave_celular.pem")
+    try:
+        if not (os.path.exists(ruta_cert) and os.path.exists(ruta_clave)):
+            import datetime as dt
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+
+            clave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            nombre = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Proyecto Chapa NFC")])
+            ahora = dt.datetime.now(dt.timezone.utc)
+            certificado = (
+                x509.CertificateBuilder()
+                .subject_name(nombre)
+                .issuer_name(nombre)
+                .public_key(clave.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(ahora - dt.timedelta(days=1))
+                .not_valid_after(ahora + dt.timedelta(days=3650))
+                .sign(clave, hashes.SHA256())
+            )
+            with open(ruta_clave, "wb") as f:
+                f.write(clave.private_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PrivateFormat.PKCS8,
+                    serialization.NoEncryption()))
+            with open(ruta_cert, "wb") as f:
+                f.write(certificado.public_bytes(serialization.Encoding.PEM))
+        return (ruta_cert, ruta_clave)
+    except Exception as e:
+        print(f"⚠️ No se pudo guardar el certificado del celular ({e}). Se usa uno temporal.")
+        return 'adhoc'
+
+
 def iniciar_http_local(ip_local):
     """Computadora: HTTP en el puerto 5000. 'localhost' es origen seguro, así que la cámara funciona igual."""
     print(f"💻 Administrador en la computadora: http://127.0.0.1:{PUERTO}/")
@@ -567,7 +606,7 @@ if __name__ == '__main__':
 
     if tiene_https:
         try:
-            app.run(host='0.0.0.0', port=PUERTO_HTTPS, debug=False, threaded=True, ssl_context='adhoc')
+            app.run(host='0.0.0.0', port=PUERTO_HTTPS, debug=False, threaded=True, ssl_context=contexto_ssl_celular())
         except Exception as e:
             print(f"⚠️ HTTPS no disponible en el puerto {PUERTO_HTTPS} ({e}). El administrador sigue funcionando en http://127.0.0.1:{PUERTO}/")
             hilo_http.join()

@@ -77,17 +77,25 @@ def autodetectar_puerto_arduino():
 # =========================================================================
 # SÍNTESIS DE VOZ Y BARRA DE CARGA FLUIDA EN CONSOLA
 # =========================================================================
+_bloqueo_voz = threading.Lock()
+
 def hablar(texto):
-    """Inicializa y destruye el motor en cada llamada para evitar que se congele la voz."""
-    try:
-        engine_local = pyttsx3.init()
-        engine_local.setProperty('rate', 170)
-        engine_local.say(texto)
-        engine_local.runAndWait()
-        engine_local.stop()
-        del engine_local
-    except Exception as e:
-        print(f"⚠️ Error en sintetizador de voz: {e}")
+    """Inicializa y destruye el motor en cada llamada. Se ejecuta en un hilo aparte para no frenar la lectura."""
+    with _bloqueo_voz:
+        try:
+            try:
+                import pythoncom  # Windows: COM debe iniciarse en cada hilo que use la voz
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+            engine_local = pyttsx3.init()
+            engine_local.setProperty('rate', 170)
+            engine_local.say(texto)
+            engine_local.runAndWait()
+            engine_local.stop()
+            del engine_local
+        except Exception as e:
+            print(f"⚠️ Error en sintetizador de voz: {e}")
 
 def limpiar_pantalla():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -194,6 +202,47 @@ def obtener_usuarios_hibrido():
     usuarios_locales = cargar_usuarios_locales()
     return usuarios_locales, False
 
+# ---------------------------------------------------------------------------
+# Tareas que no deben frenar la lectura del puerto (Firebase, voz, cuenta regresiva)
+# ---------------------------------------------------------------------------
+def en_segundo_plano(funcion, *args):
+    threading.Thread(target=funcion, args=args, daemon=True).start()
+
+_cache_usuarios = {"valor": None}
+_bloqueo_cache = threading.Lock()
+
+def _actualizar_cache_usuarios():
+    valor = obtener_usuarios_hibrido()
+    with _bloqueo_cache:
+        _cache_usuarios["valor"] = valor
+
+def usuarios_en_cache(uid=None):
+    """Devuelve (usuarios, online) sin esperar a Firebase en cada tarjeta.
+    Si la tarjeta no está en la copia, pide la lista actual antes de decidir."""
+    with _bloqueo_cache:
+        valor = _cache_usuarios["valor"]
+    if valor is None:
+        return cargar_usuarios_locales(), False
+    if uid and uid not in valor[0]:
+        _actualizar_cache_usuarios()
+        with _bloqueo_cache:
+            valor = _cache_usuarios["valor"]
+    return valor
+
+def _refrescar_cache_usuarios():
+    while True:
+        time.sleep(10)
+        try:
+            _actualizar_cache_usuarios()
+        except Exception:
+            pass
+
+def _enviar_log_nube(log_data):
+    try:
+        requests.post(f"{URL_BASE}/logs.json", json=log_data, timeout=2.5)
+    except Exception:
+        pass
+
 def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
     global cant_permitidos, cant_denegados
     if estado == "PERMITIDO":
@@ -224,7 +273,7 @@ def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
         print(f"⚠️ Error al guardar en CSV local: {e}")
 
     try:
-        requests.post(f"{URL_BASE}/logs.json", json=log_data, timeout=2.5)
+        threading.Thread(target=_enviar_log_nube, args=(log_data,), daemon=True).start()
     except Exception:
         pass
         
@@ -857,7 +906,8 @@ def main():
     animar_carga_hasta(45, "Precargando historial de accesos (Firebase / Local)...", pasitos=10, demora=0.01)
     precargar_estadisticas_iniciales()
     animar_carga_hasta(75, "Descargando base de usuarios autorizados...", pasitos=10, demora=0.01)
-    obtener_usuarios_hibrido()
+    _actualizar_cache_usuarios()
+    threading.Thread(target=_refrescar_cache_usuarios, daemon=True).start()
     animar_carga_hasta(90, "Inicializando motor de voz sintetizada...", pasitos=6, demora=0.01)
     animar_carga_hasta(100, "¡Sistema cargado con éxito!", pasitos=5, demora=0.01)
     time.sleep(0.3)
@@ -899,7 +949,7 @@ def main():
                         guardar_ultima_tarjeta(uid)  # para que el panel pueda tomar la tarjeta escaneada
                         if es_lectura_repetida(uid):
                             continue  # la misma tarjeta sigue apoyada en el lector: no abrir dos veces
-                        usuarios_dict, online = obtener_usuarios_hibrido()
+                        usuarios_dict, online = usuarios_en_cache(uid)
                         
                         if len(uid) < 8 or not all(c in '0123456789ABCDEF' for c in uid):
                             try:
@@ -910,7 +960,7 @@ def main():
                             fecha = registrar_evento_local_y_nube(uid, "Desconocido", "DENEGADO", "MALA_LECTURA")
                             imprimir_encabezado_escucha()
                             print(f"[{fecha}] ⚠️ DENEGADO -> Error de lectura | UID: {uid}\n")
-                            hablar("Acceso denegado. Error de lectura de tarjeta. Pase la tarjeta de nuevo.")
+                            en_segundo_plano(hablar, "Acceso denegado. Error de lectura de tarjeta. Pase la tarjeta de nuevo.")
 
                         elif uid in usuarios_dict:
                             nombre = usuarios_dict[uid]
@@ -922,8 +972,8 @@ def main():
                             fecha = registrar_evento_local_y_nube(uid, nombre, "PERMITIDO", "OK")
                             imprimir_encabezado_escucha()
                             print(f"[{fecha}] 🔓 AUTORIZADO -> Usuario: {nombre} | UID: {uid}")
-                            hablar(f"Acceso autorizado. Bienvenido {nombre}.")
-                            ejecutar_cuenta_regresiva_chapa(3)  # <--- AJUSTADO A 3 SEGUNDOS
+                            en_segundo_plano(hablar, f"Acceso autorizado. Bienvenido {nombre}.")
+                            en_segundo_plano(ejecutar_cuenta_regresiva_chapa, 3)  # en paralelo: no frena la lectura
 
                         else:
                             try:
@@ -934,7 +984,7 @@ def main():
                             fecha = registrar_evento_local_y_nube(uid, "Desconocido", "DENEGADO", "NO_REGISTRADO")
                             imprimir_encabezado_escucha()
                             print(f"[{fecha}] ❌ DENEGADO -> Tarjeta NO registrada | UID: {uid}\n")
-                            hablar("Acceso denegado. Tarjeta no registrada en el sistema.")
+                            en_segundo_plano(hablar, "Acceso denegado. Tarjeta no registrada en el sistema.")
 
                         try:
                             ser.reset_input_buffer()
