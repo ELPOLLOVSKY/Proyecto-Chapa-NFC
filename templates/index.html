@@ -273,7 +273,7 @@
                 }
                 mostrarMensaje('msg-usuario', false, 'No se detectó ninguna tarjeta en 20 segundos. Revisa que el lector esté conectado.');
             } catch (err) {
-                mostrarMensaje('msg-usuario', false, 'Error de conexión con el servidor');
+                mostrarMensaje('msg-usuario', false, 'No hay conexión con el servidor del PC. Revisa que el programa del motor esté abierto.');
             } finally {
                 boton.disabled = false;
             }
@@ -366,7 +366,7 @@
 
         function enviarDebug(cmd) {
             post('/api/debug', { cmd }).then(r => mostrarMensaje('msg-debug', r.success, r.mensaje))
-                .catch(() => mostrarMensaje('msg-debug', false, 'Error de conexión con el servidor'));
+                .catch(() => mostrarMensaje('msg-debug', false, 'No hay conexión con el servidor del PC. Revisa que el programa del motor esté abierto.'));
         }
 
         conectarTiempoReal();

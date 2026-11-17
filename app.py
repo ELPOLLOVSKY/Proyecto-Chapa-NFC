@@ -103,13 +103,15 @@ def obtener_ip_local():
     except OSError:
         pass
 
-    # Prioridad: 192.168.x (Wi‑Fi casero) > 10.x > 172.16-31 (suele ser Docker/WSL/virtual)
+    # Prioridad: 192.168.137.x (hotspot de Windows, IP fija) > otros 192.168.x > 10.x > 172.16-31
     def prioridad(ip):
-        if ip.startswith("192.168."):
+        if ip.startswith("192.168.137."):
             return 0
-        if ip.startswith("10."):
+        if ip.startswith("192.168."):
             return 1
-        return 2
+        if ip.startswith("10."):
+            return 2
+        return 3
 
     locales = [ip for ip in candidatas if _es_red_local(ip)]
     if locales:
@@ -621,19 +623,20 @@ def contexto_ssl_celular():
         return 'adhoc'
 
 
-def iniciar_http_local(ip_local):
-    """Computadora: HTTP en el puerto 5000. 'localhost' es origen seguro, así que la cámara funciona igual."""
-    print(f"💻 Administrador en la computadora: http://127.0.0.1:{PUERTO}/")
-    app.run(host='0.0.0.0', port=PUERTO, debug=False, threaded=True)
+def servir_con_reintentos(nombre, puerto, ssl_context=None):
+    """Mantiene el servidor vivo: si el puerto está ocupado o el servidor se cae, vuelve a intentarlo."""
+    while True:
+        try:
+            print(f"🌐 Servidor {nombre} en el puerto {puerto}")
+            app.run(host='0.0.0.0', port=puerto, debug=False, threaded=True, ssl_context=ssl_context)
+            motivo = "se detuvo"
+        except Exception as e:
+            motivo = f"no pudo iniciar ({e})"
+        print(f"⚠️ Servidor {nombre} (puerto {puerto}) {motivo}. Reintentando en 5 s...")
+        time.sleep(5)
 
 
 if __name__ == '__main__':
-    for p in (PUERTO, PUERTO_HTTPS):
-        if puerto_ocupado(p):
-            print(f"⚠️ El puerto {p} ya está en uso: hay otro servidor web abierto.")
-            print("   Cierra la otra ventana o reinicia el equipo, y vuelve a iniciar el sistema.")
-            sys.exit(1)
-
     ip_local = obtener_ip_local()
     try:
         import cryptography  # noqa: F401
@@ -648,18 +651,14 @@ if __name__ == '__main__':
         print("⚠️ Falta 'cryptography': el celular no podrá usar la cámara. Instala requirements.txt.")
         mostrar_qr_servidor(f"http://{ip_local}:{PUERTO}/celular")
 
-    # HTTP en segundo plano para la computadora
-    hilo_http = threading.Thread(target=iniciar_http_local, args=(ip_local,), daemon=True)
-    hilo_http.start()
+    # Administrador en la computadora (puerto 5000): se reintenta solo si se cae
+    threading.Thread(target=servir_con_reintentos, args=("computadora", PUERTO), daemon=True).start()
 
     # Sincronización con Firebase (latidos, usuarios, tarjetas de otros equipos)
     threading.Thread(target=bucle_firebase, daemon=True).start()
 
     if tiene_https:
-        try:
-            app.run(host='0.0.0.0', port=PUERTO_HTTPS, debug=False, threaded=True, ssl_context=contexto_ssl_celular())
-        except Exception as e:
-            print(f"⚠️ HTTPS no disponible en el puerto {PUERTO_HTTPS} ({e}). El administrador sigue funcionando en http://127.0.0.1:{PUERTO}/")
-            hilo_http.join()
+        servir_con_reintentos("celular", PUERTO_HTTPS, contexto_ssl_celular())
     else:
-        hilo_http.join()
+        while True:
+            time.sleep(60)

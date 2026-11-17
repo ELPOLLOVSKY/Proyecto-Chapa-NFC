@@ -42,8 +42,12 @@ porcentaje_actual_carga = 0
 # =========================================================================
 # AUTO-ARRANQUE DEL SERVIDOR WEB EN SEGUNDO PLANO (HILO AUTOMÁTICO)
 # =========================================================================
+_proceso_web = None
+_ultimo_intento_web = 0.0
+
 def iniciar_servidor_web_automatico():
     """Lanza el servidor app.py automáticamente en segundo plano al iniciar el motor."""
+    global _proceso_web
     script_web = os.path.join(RUTA_BASE, "app.py")
     if os.path.exists(script_web):
         try:
@@ -52,9 +56,20 @@ def iniciar_servidor_web_automatico():
             log_web = open(os.path.join(RUTA_BASE, "web_app.log"), "a", encoding="utf-8")
             log_web.write(f"\n--- Arranque {datetime.now()} ---\n")
             log_web.flush()
-            subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT)
-        except Exception:
-            pass
+            _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT)
+        except Exception as e:
+            print(f"⚠️ No se pudo iniciar el servidor web: {e}")
+
+def vigilar_servidor_web():
+    """Si el servidor web (app.py) se cerró, lo vuelve a levantar."""
+    global _ultimo_intento_web
+    if _proceso_web is None or _proceso_web.poll() is None:
+        return
+    if time.time() - _ultimo_intento_web < 5:
+        return
+    print(f"\n⚠️ El servidor web se cerró (código {_proceso_web.returncode}). Reiniciando...")
+    _ultimo_intento_web = time.time()
+    iniciar_servidor_web_automatico()
 
 # =========================================================================
 # AUTO-DETECCIÓN INTELIGENTE DE PUERTO COM SERIE
@@ -992,6 +1007,7 @@ def main():
                         except Exception:
                             pass
 
+                vigilar_servidor_web()
                 procesar_cola_debug(ser)
 
                 tecla = capturar_tecla_instantanea()
