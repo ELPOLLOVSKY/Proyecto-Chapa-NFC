@@ -11,6 +11,7 @@ import requests
 import subprocess
 import sys
 import threading
+from cola_nube import ColaNube
 
 # =========================================================================
 # CONFIGURACIÓN DE FIREBASE Y ARCHIVOS LOCALES
@@ -29,6 +30,11 @@ def obtener_ruta_base():
         return os.path.dirname(os.path.abspath(__file__))
 
 RUTA_BASE = obtener_ruta_base()
+
+# Registros de acceso que no llegaron a Firebase (se reenvían al volver la conexión)
+cola_nube_motor = ColaNube(os.path.join(RUTA_BASE, "pendientes_nube_motor.json"), URL_BASE)
+# Cambios de usuarios pendientes en la app web: si existen, no se pisan con los datos de la nube
+RUTA_COLA_APP = os.path.join(RUTA_BASE, "pendientes_nube_app.json")
 ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
 ARCHIVO_JSON_USUARIOS = os.path.join(RUTA_BASE, "usuarios_locales.json")
 ARCHIVO_COLA_DEBUG = os.path.join(RUTA_BASE, "cola_debug.json")
@@ -56,7 +62,7 @@ def iniciar_servidor_web_automatico():
             log_web = open(os.path.join(RUTA_BASE, "web_app.log"), "a", encoding="utf-8")
             log_web.write(f"\n--- Arranque {datetime.now()} ---\n")
             log_web.flush()
-            _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT)
+            _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         except Exception as e:
             print(f"⚠️ No se pudo iniciar el servidor web: {e}")
 
@@ -69,6 +75,25 @@ def ultimas_lineas_log_web(n=15):
             return "".join(f.readlines()[-n:])
     except OSError:
         return "(no se pudo leer web_app.log)"
+
+_estado_nfc = None
+
+def _informar_estado_nfc(linea):
+    """El Arduino avisa si el módulo NFC responde. Solo muestra un aviso cuando cambia."""
+    global _estado_nfc
+    if linea.startswith("LIVE:"):
+        ok = linea.endswith("RFID_OK")
+    elif linea in ("RFID_OK", "RFID_NO_CONECTADO"):
+        ok = linea == "RFID_OK"
+    else:
+        return  # latido antiguo sin estado del módulo
+    if ok != _estado_nfc:
+        _estado_nfc = ok
+        if ok:
+            print("\n📡 Módulo NFC conectado y respondiendo.\n")
+        else:
+            print("\n❌ MÓDULO NFC NO DETECTADO. Revisa los cables del RC522: "
+                  "3.3V, GND, SDA/SS pin 10, SCK pin 13, MOSI pin 11, MISO pin 12, RST pin 9.\n")
 
 def vigilar_servidor_web():
     """Si el servidor web (app.py) se cerró, lo vuelve a levantar con esperas crecientes.
@@ -227,7 +252,10 @@ def obtener_usuarios_hibrido():
             data = response.json()
             if data is None:
                 data = {}
-            guardar_usuarios_locales(data)
+            if ColaNube(RUTA_COLA_APP, URL_BASE).pendientes() == 0:
+                guardar_usuarios_locales(data)
+            else:
+                data = cargar_usuarios_locales()  # hay cambios locales sin subir: no se pisan
             return data, True
     except Exception:
         pass
@@ -271,10 +299,16 @@ def _refrescar_cache_usuarios():
             pass
 
 def _enviar_log_nube(log_data):
-    try:
-        requests.post(f"{URL_BASE}/logs.json", json=log_data, timeout=2.5)
-    except Exception:
-        pass
+    # Si no hay conexión, el registro queda pendiente y se reenvía después
+    cola_nube_motor.enviar("POST", "/logs.json", log_data)
+
+def _vaciar_cola_motor():
+    while True:
+        time.sleep(10)
+        try:
+            cola_nube_motor.vaciar()
+        except Exception:
+            pass
 
 def registrar_evento_local_y_nube(uid, nombre, estado, detalle=""):
     global cant_permitidos, cant_denegados
@@ -941,6 +975,7 @@ def main():
     animar_carga_hasta(75, "Descargando base de usuarios autorizados...", pasitos=10, demora=0.01)
     _actualizar_cache_usuarios()
     threading.Thread(target=_refrescar_cache_usuarios, daemon=True).start()
+    threading.Thread(target=_vaciar_cola_motor, daemon=True).start()
     animar_carga_hasta(90, "Inicializando motor de voz sintetizada...", pasitos=6, demora=0.01)
     animar_carga_hasta(100, "¡Sistema cargado con éxito!", pasitos=5, demora=0.01)
     time.sleep(0.3)
@@ -982,9 +1017,10 @@ def main():
                     except Exception:
                         linea = ""
                     
-                    if linea == "LIVE":
-                        con_latido = True
+                    if linea.startswith("LIVE") or linea in ("RFID_OK", "RFID_NO_CONECTADO"):
+                        con_latido = con_latido or linea.startswith("LIVE")
                         ultimo_dato = time.time()
+                        _informar_estado_nfc(linea)
                     elif linea.startswith("CARD:"):
                         uid = linea.split(":")[1].upper()
                         guardar_ultima_tarjeta(uid)  # para que el panel pueda tomar la tarjeta escaneada

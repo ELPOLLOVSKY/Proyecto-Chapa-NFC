@@ -1,2 +1,4 @@
 cert_celular.pem
 clave_celular.pem
+pendientes_nube_*.json
+pendientes_nube_*.json.tmp
