@@ -49,7 +49,23 @@ PUERTO = 5000
 URL_FIREBASE = "https://registros-acceso-nfc-default-rtdb.firebaseio.com"
 CAMPOS_LOG = ["fecha_hora", "timestamp", "uid", "usuario", "estado", "detalle"]
 COMANDOS_DEBUG = {"DBG_START", "DBG_CHAPA_ON", "DBG_CHAPA_OFF", "OK"}
-UMBRAL_SIMILITUD = 0.363  # Umbral de coseno recomendado por OpenCV para SFace
+# Reconocimiento facial: calidad mínima y decisión
+UMBRAL_SIMILITUD = 0.45    # coseno mínimo para aceptar (OpenCV sugiere 0.363; se sube para evitar confusiones)
+MARGEN_SIMILITUD = 0.06    # el mejor debe superar al segundo usuario por este margen; si no, es dudoso
+SCORE_MINIMO_CARA = 0.90   # confianza mínima del detector de caras
+ANCHO_MINIMO_CARA = 90     # px: una cara más chica significa que la persona está muy lejos
+NITIDEZ_MINIMA = 40.0      # varianza del Laplaciano: menor valor = imagen borrosa
+MENSAJES_CALIDAD = {
+    'sin_rostro': 'Sin rostro frente a la cámara',
+    'varias_caras': 'Hay más de una persona frente a la cámara',
+    'lejos': 'Acércate a la cámara',
+    'borroso': 'Imagen borrosa: mantente quieto',
+    'centrar': 'Centra tu rostro en el óvalo',
+    'cerca': 'Aléjate un poco de la cámara',
+}
+TIEMPO_MAX_CAPTURA = 180    # s: una captura de rostro se cancela sola si queda colgada
+FOTOS_POR_CAPTURA = 3
+INTERVALO_FOTOS = 1.0       # s entre fotos, para que no sean casi iguales
 SEGUNDOS_APERTURA = 3
 SEGUNDOS_ENVIO_ESTADO = 1.0  # Aunque no cambie nada, se reenvía el estado cada segundo (cuenta regresiva)
 
@@ -64,7 +80,9 @@ cola_nube_app = ColaNube(os.path.join(DATOS_DIR, "pendientes_nube_app.json"), UR
 
 _detector = None
 _reconocedor = None
-_cache_rasgos = {}  # uid -> (mtime de la foto, rasgos faciales)
+_cache_rasgos = {}  # ruta de foto -> (mtime, rasgos faciales)
+_captura = None     # captura de rostro en curso (o None)
+_bloqueo_captura = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -276,35 +294,101 @@ def decodificar_imagen(data_url):
     return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
 
 
-def extraer_rasgos(imagen):
-    """Devuelve los rasgos faciales de la cara más grande de la imagen, o None si no hay cara."""
+def fotos_de(uid):
+    """Todas las fotos de un usuario (cada una es una plantilla de rostro)."""
+    if not os.path.isdir(CARPETA_ROSTROS):
+        return []
+    encontradas = []
+    for nombre in os.listdir(CARPETA_ROSTROS):
+        base, ext = os.path.splitext(nombre)
+        if ext.lower() == ".jpg" and (base == uid or base.startswith(uid + "_")):
+            encontradas.append(os.path.join(CARPETA_ROSTROS, nombre))
+    return sorted(encontradas)
+
+
+def nueva_foto_path(uid):
+    return os.path.join(CARPETA_ROSTROS, f"{uid}_{int(time.time() * 1000)}.jpg")
+
+
+def normalizar_luz(imagen):
+    """Iguala la luz (CLAHE sobre la luminancia): la misma cara se parece más
+    aunque cambie la iluminación entre el registro y la entrada."""
+    ycrcb = cv2.cvtColor(imagen, cv2.COLOR_BGR2YCrCb)
+    ycrcb[:, :, 0] = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(ycrcb[:, :, 0])
+    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+
+
+def analizar_rostro(imagen):
+    """Analiza la calidad de la cara y, si es válida, calcula sus rasgos.
+    estado: ok | sin_rostro | varias_caras | lejos | borroso"""
     cargar_modelos_rostro()
+    imagen = normalizar_luz(imagen)
     alto, ancho = imagen.shape[:2]
     _detector.setInputSize((ancho, alto))
     _, caras = _detector.detect(imagen)
     if caras is None or len(caras) == 0:
-        return None
-    cara = max(caras, key=lambda c: c[2] * c[3])
-    alineada = _reconocedor.alignCrop(imagen, cara)
-    return _reconocedor.feature(alineada)
+        return {"estado": "sin_rostro"}
+    seguras = [c for c in caras if c[14] >= SCORE_MINIMO_CARA]
+    if not seguras:
+        return {"estado": "sin_rostro"}
+    if len(seguras) > 1:
+        return {"estado": "varias_caras"}
+    cara = seguras[0]
+    x, y, w, h = (int(v) for v in cara[:4])
+    info = {"caja": (x, y, w, h), "ancho_imagen": ancho, "alto_imagen": alto}
+    if w < ANCHO_MINIMO_CARA:
+        return {"estado": "lejos", **info}
+    recorte = imagen[max(0, y):max(0, y) + h, max(0, x):max(0, x) + w]
+    if recorte.size == 0:
+        return {"estado": "sin_rostro"}
+    nitidez = cv2.Laplacian(cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+    if nitidez < NITIDEZ_MINIMA:
+        return {"estado": "borroso", **info}
+    rasgos = _reconocedor.feature(_reconocedor.alignCrop(imagen, cara))
+    return {"estado": "ok", "rasgos": rasgos, **info}
 
 
-def rasgos_de_foto_usuario(uid):
-    ruta = ruta_foto(uid)
-    if not os.path.exists(ruta):
-        return None
-    mtime = os.path.getmtime(ruta)
-    cache = _cache_rasgos.get(uid)
-    if cache and cache[0] == mtime:
-        return cache[1]
-    imagen = cv2.imread(ruta)
-    rasgos = extraer_rasgos(imagen) if imagen is not None else None
-    _cache_rasgos[uid] = (mtime, rasgos)
-    return rasgos
+def rasgos_de_usuario(uid):
+    """Rasgos de todas las fotos válidas del usuario. Se recalculan solo si cambia el archivo."""
+    lista = []
+    for ruta in fotos_de(uid):
+        mtime = os.path.getmtime(ruta)
+        cache = _cache_rasgos.get(ruta)
+        if cache and cache[0] == mtime:
+            rasgos = cache[1]
+        else:
+            imagen = cv2.imread(ruta)
+            resultado = analizar_rostro(imagen) if imagen is not None else {"estado": "invalida"}
+            rasgos = resultado.get("rasgos") if resultado["estado"] == "ok" else None
+            _cache_rasgos[ruta] = (mtime, rasgos)
+        if rasgos is not None:
+            lista.append(rasgos)
+    return lista
 
 
 def similitud(rasgos_a, rasgos_b):
     return _reconocedor.match(rasgos_a, rasgos_b, cv2.FaceRecognizerSF_FR_COSINE)
+
+
+def identificar(rasgos_vivo, usuarios):
+    """Compara con todas las fotos de cada usuario (se toma la mejor de cada uno).
+    Devuelve (uid, similitud, segunda_similitud, decision).
+    decision: ok | sin_coincidencia | ambiguo"""
+    puntajes = []
+    for uid in usuarios:
+        plantillas = rasgos_de_usuario(uid)
+        if plantillas:
+            puntajes.append((max(similitud(rasgos_vivo, r) for r in plantillas), uid))
+    if not puntajes:
+        return None, -1.0, -1.0, "sin_coincidencia"
+    puntajes.sort(reverse=True)
+    mejor, uid = puntajes[0]
+    segundo = puntajes[1][0] if len(puntajes) > 1 else -1.0
+    if mejor < UMBRAL_SIMILITUD:
+        return uid, mejor, segundo, "sin_coincidencia"
+    if mejor - segundo < MARGEN_SIMILITUD:
+        return uid, mejor, segundo, "ambiguo"
+    return uid, mejor, segundo, "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +407,8 @@ def calcular_estado():
         u = logs[-1]
         uid = u.get("uid", "")
         ts = int(u.get("timestamp") or 0)
-        foto_url = f"/rostros_usuarios/{uid}.jpg" if uid and os.path.exists(ruta_foto(uid)) else None
+        fotos_usuario = fotos_de(uid) if uid else []
+        foto_url = f"/rostros_usuarios/{os.path.basename(fotos_usuario[-1])}" if fotos_usuario else None
         ultimo = {
             "fecha_hora": u.get("fecha_hora", ""),
             "uid": uid,
@@ -349,6 +434,7 @@ def calcular_estado():
         "firebase_ok": sync.ultimo_error is None,
         "latencia_firebase_ms": sync.latencia_ms,
         "pendientes_nube": cola_nube_app.pendientes(),
+        "captura": captura_resumen(),
     }
 
 
@@ -466,41 +552,40 @@ def api_verificar_rostro():
     imagen_data = data.get('imagen', '')
     if not imagen_data:
         return jsonify({"success": False, "mensaje": "No se recibió imagen"})
+    if captura_resumen() is not None:
+        # Mientras se registra un rostro no se escanea ni se abre la chapa
+        return jsonify({"success": False, "en_captura": True, "mensaje": "Registro de rostro en curso"})
 
     try:
         imagen = decodificar_imagen(imagen_data)
         if imagen is None:
             return jsonify({"success": False, "mensaje": "La imagen no es válida"})
 
-        rasgos_vivo = extraer_rasgos(imagen)
-        if rasgos_vivo is None:
-            # Sin rostro frente a la cámara: no es un evento, no se registra
-            return jsonify({"success": False, "sin_rostro": True, "mensaje": "Sin rostro"})
+        analisis = analizar_rostro(imagen)
+        if analisis["estado"] != "ok":
+            # Calidad insuficiente: no es un evento, no se registra
+            return jsonify({"success": False, "sin_rostro": True, "calidad": analisis["estado"],
+                            "mensaje": MENSAJES_CALIDAD.get(analisis["estado"], "Sin rostro")})
 
         usuarios = cargar_usuarios_locales()
-        mejor_uid, mejor_similitud = None, -1.0
-        for uid in usuarios:
-            rasgos = rasgos_de_foto_usuario(uid)
-            if rasgos is None:
-                continue
-            s = similitud(rasgos_vivo, rasgos)
-            if s > mejor_similitud:
-                mejor_uid, mejor_similitud = uid, s
+        uid, mejor, segundo, decision = identificar(analisis["rasgos"], usuarios)
+        print(f"[FACIAL] decision={decision} usuario={uid} similitud={mejor:.3f} segundo={segundo:.3f}")
 
-        if mejor_uid is not None and mejor_similitud >= UMBRAL_SIMILITUD:
-            nombre = nombre_de(usuarios[mejor_uid])
+        if decision == "ok":
+            nombre = nombre_de(usuarios[uid])
             # Si la misma persona acaba de entrar, no se vuelve a abrir ni a registrar
-            if not ultimo_evento_coincide(mejor_uid, "PERMITIDO", "RECONOCIMIENTO_FACIAL", 8):
-                registrar_log(mejor_uid, nombre, "PERMITIDO", "RECONOCIMIENTO_FACIAL")
+            if not ultimo_evento_coincide(uid, "PERMITIDO", "RECONOCIMIENTO_FACIAL", 8):
+                registrar_log(uid, nombre, "PERMITIDO", "RECONOCIMIENTO_FACIAL")
                 # Abrir la chapa: el motor recibe la orden y la envía al Arduino
-                encolar_comando({"cmd": "OK", "origen": "FACIAL", "uid": mejor_uid,
+                encolar_comando({"cmd": "OK", "origen": "FACIAL", "uid": uid,
                                  "nombre": nombre, "ts": time.time()})
             return jsonify({"success": True, "mensaje": f"✅ Autorizado: {nombre}"})
 
-        # Rostro desconocido frente a la cámara: se registra como máximo una vez cada 5 segundos
+        # Rostro desconocido o dudoso: se registra como máximo una vez cada 5 segundos
         if not ultimo_evento_coincide("", "DENEGADO", "ROSTRO_NO_RECONOCIDO", 5):
             registrar_log("", "Desconocido", "DENEGADO", "ROSTRO_NO_RECONOCIDO")
-        return jsonify({"success": False, "mensaje": "❌ Rostro no reconocido"})
+        motivo = "❌ Rostro no reconocido" if decision == "sin_coincidencia" else "❌ Rostro dudoso, no se abre"
+        return jsonify({"success": False, "mensaje": motivo})
 
     except RuntimeError as e:
         return jsonify({"success": False, "mensaje": str(e)})
@@ -510,7 +595,7 @@ def api_verificar_rostro():
 
 @app.route('/api/usuario/foto', methods=['POST'])
 def api_usuario_foto():
-    """Guarda la foto de registro de un usuario ya asociado a una tarjeta."""
+    """Guarda una foto de registro (se suma a las demás del usuario) con control de calidad."""
     data = request.get_json(silent=True) or {}
     uid = (data.get('uid') or '').strip().upper()
     if uid not in cargar_usuarios_locales():
@@ -520,16 +605,113 @@ def api_usuario_foto():
         imagen = decodificar_imagen(data.get('imagen', ''))
         if imagen is None:
             return jsonify({"success": False, "mensaje": "La imagen no es válida"})
-        if extraer_rasgos(imagen) is None:
-            return jsonify({"success": False, "mensaje": "No se detectó un rostro en la foto"})
-
-        cv2.imwrite(ruta_foto(uid), imagen)
-        _cache_rasgos.pop(uid, None)
+        analisis = analizar_rostro(imagen)
+        if analisis["estado"] != "ok":
+            return jsonify({"success": False, "mensaje": MENSAJES_CALIDAD.get(analisis["estado"], "Sin rostro")})
+        cv2.imwrite(nueva_foto_path(uid), imagen)
         return jsonify({"success": True, "mensaje": "✅ Rostro guardado para este usuario"})
     except RuntimeError as e:
         return jsonify({"success": False, "mensaje": str(e)})
     except Exception as e:
         return jsonify({"success": False, "mensaje": f"Error al guardar la foto: {e}"})
+
+
+# ---------------------------------------------------------------------------
+# Rutas: captura de rostro (desde el celular o la cámara de la computadora)
+# ---------------------------------------------------------------------------
+def _limpiar_captura_si_vencio():
+    global _captura
+    if _captura and time.time() - _captura["inicio"] > TIEMPO_MAX_CAPTURA:
+        _captura = None
+
+
+def captura_resumen():
+    """Estado de la captura en curso para el celular y el admin (o None)."""
+    with _bloqueo_captura:
+        _limpiar_captura_si_vencio()
+        if not _captura:
+            return None
+        return {k: _captura[k] for k in ("uid", "nombre", "origen", "centrar", "tomadas", "meta")}
+
+
+@app.route('/api/captura/iniciar', methods=['POST'])
+def api_captura_iniciar():
+    global _captura
+    data = request.get_json(silent=True) or {}
+    uid = (data.get('uid') or '').strip().upper()
+    origen = data.get('origen') if data.get('origen') in ('celular', 'computadora') else 'celular'
+    centrar = bool(data.get('centrar'))
+    usuarios = cargar_usuarios_locales()
+    if uid not in usuarios:
+        return jsonify({"success": False, "mensaje": "Primero guarda el usuario con su tarjeta"})
+    with _bloqueo_captura:
+        _captura = {"uid": uid, "nombre": nombre_de(usuarios[uid]), "origen": origen,
+                    "centrar": centrar, "tomadas": 0, "meta": FOTOS_POR_CAPTURA,
+                    "inicio": time.time(), "ultima": 0.0}
+    lugar = "el celular" if origen == "celular" else "esta computadora"
+    return jsonify({"success": True, "mensaje": f"Captura iniciada desde {lugar}"})
+
+
+@app.route('/api/captura/cancelar', methods=['POST'])
+def api_captura_cancelar():
+    global _captura
+    with _bloqueo_captura:
+        _captura = None
+    return jsonify({"success": True, "mensaje": "Captura cancelada"})
+
+
+@app.route('/api/captura/frame', methods=['POST'])
+def api_captura_frame():
+    global _captura
+    data = request.get_json(silent=True) or {}
+    with _bloqueo_captura:
+        _limpiar_captura_si_vencio()
+        cap = dict(_captura) if _captura else None
+    if cap is None:
+        return jsonify({"success": False, "guia": "inactiva", "mensaje": "No hay captura activa"})
+
+    try:
+        imagen = decodificar_imagen(data.get('imagen', ''))
+        if imagen is None:
+            return jsonify({"success": False, "guia": "imagen", "mensaje": "La imagen no es válida"})
+
+        analisis = analizar_rostro(imagen)
+        if analisis["estado"] != "ok":
+            return jsonify({"success": False, "guia": analisis["estado"],
+                            "mensaje": MENSAJES_CALIDAD.get(analisis["estado"], "Sin rostro")})
+
+        if cap["centrar"]:
+            x, y, w, h = analisis["caja"]
+            ancho, alto = analisis["ancho_imagen"], analisis["alto_imagen"]
+            centro_x, centro_y = (x + w / 2) / ancho, (y + h / 2) / alto
+            if w / ancho > 0.65:
+                return jsonify({"success": False, "guia": "cerca", "mensaje": MENSAJES_CALIDAD["cerca"]})
+            if abs(centro_x - 0.5) > 0.12 or abs(centro_y - 0.5) > 0.15:
+                return jsonify({"success": False, "guia": "centrar", "mensaje": MENSAJES_CALIDAD["centrar"]})
+
+        with _bloqueo_captura:
+            if not _captura or _captura["uid"] != cap["uid"]:
+                return jsonify({"success": False, "guia": "inactiva", "mensaje": "La captura ya terminó"})
+            ahora = time.time()
+            if ahora - _captura["ultima"] < INTERVALO_FOTOS:
+                return jsonify({"success": True, "guia": "ok", "completada": False,
+                                "tomadas": _captura["tomadas"], "meta": cap["meta"],
+                                "mensaje": "Buena posición, mantente quieto"})
+            cv2.imwrite(nueva_foto_path(cap["uid"]), imagen)
+            _captura["tomadas"] += 1
+            _captura["ultima"] = ahora
+            tomadas = _captura["tomadas"]
+            completada = tomadas >= _captura["meta"]
+            if completada:
+                _captura = None
+
+        mensaje = "✅ Captura completa" if completada else f"Foto {tomadas} de {cap['meta']} guardada"
+        return jsonify({"success": True, "guia": "ok", "completada": completada,
+                        "tomadas": tomadas, "meta": cap["meta"], "mensaje": mensaje})
+    except RuntimeError as e:
+        return jsonify({"success": False, "guia": "error", "mensaje": str(e)})
+    except Exception as e:
+        return jsonify({"success": False, "guia": "error", "mensaje": f"Error al capturar: {e}"})
 
 
 # ---------------------------------------------------------------------------
@@ -564,9 +746,8 @@ def api_usuario_eliminar():
 
     del usuarios[uid]
     guardar_usuarios_locales(usuarios)
-    if os.path.exists(ruta_foto(uid)):
-        os.remove(ruta_foto(uid))
-    _cache_rasgos.pop(uid, None)
+    for ruta in fotos_de(uid):
+        os.remove(ruta)
     sincronizar_firebase("DELETE", f"/usuarios/{uid}.json")
     return jsonify({"success": True, "mensaje": "Usuario eliminado"})
 

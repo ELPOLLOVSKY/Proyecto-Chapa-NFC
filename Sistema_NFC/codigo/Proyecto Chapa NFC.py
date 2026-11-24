@@ -757,8 +757,15 @@ def eliminar_usuario_con_confirmacion(ser):
         if confirmar == 's':
             del usuarios_dict[uid_a_eliminar]
             guardar_usuarios_locales(usuarios_dict)
-            foto = os.path.join(DATOS_DIR, "rostros_usuarios", f"{uid_a_eliminar}.jpg")
-            if os.path.exists(foto):
+            # Se borran todas las fotos del usuario: UID.jpg y UID_*.jpg
+            carpeta_fotos = os.path.join(DATOS_DIR, "rostros_usuarios")
+            fotos = [os.path.join(carpeta_fotos, f"{uid_a_eliminar}.jpg")]
+            if os.path.isdir(carpeta_fotos):
+                fotos += [os.path.join(carpeta_fotos, n) for n in os.listdir(carpeta_fotos)
+                          if n.startswith(f"{uid_a_eliminar}_") and n.lower().endswith(".jpg")]
+            for foto in fotos:
+                if not os.path.exists(foto):
+                    continue
                 try:
                     os.remove(foto)
                 except OSError:

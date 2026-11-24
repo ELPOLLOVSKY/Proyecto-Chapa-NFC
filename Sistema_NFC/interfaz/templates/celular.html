@@ -150,6 +150,7 @@
         <button class="btn-accion" onclick="activarCamaraManual()">📷 Activar Cámara</button>
     </div>
 
+    <div id="guia-captura" style="display:none; padding:10px; text-align:center; font-weight:bold; background:rgba(0,0,0,0.6); color:#0f0;"></div>
     <div id="banner-estado">TERMINAL ACTIVA - ESPERANDO TARJETA O ROSTRO</div>
 
     <!-- PANTALLA COMPLETA DEL RESULTADO -->
@@ -211,6 +212,7 @@
         }
 
         function renderizarEstado(data) {
+            gestionarCapturaCelular(data.captura || null);
             const u = data.ultimo;
             const reciente = u && u.hace_segundos < MOSTRAR_EVENTO_SEGUNDOS;
             mostrandoAcceso = Boolean(reciente);
@@ -255,7 +257,9 @@
         // ----- Escaneo facial automático (sin botones) -----
         async function escanearRostroAuto() {
             const video = document.getElementById('webcam');
-            if (mostrandoAcceso) {
+            if (capturaActual) {
+                estadoEscaneo('● Registro de rostro en curso');
+            } else if (mostrandoAcceso) {
                 // El resultado está en pantalla: no se escanea ni se vuelve a abrir la chapa
             } else if (Date.now() < pausaHasta) {
                 // esperando después del último resultado
@@ -291,6 +295,56 @@
                 }
             }
             setTimeout(escanearRostroAuto, INTERVALO_ESCANEO_MS);
+        }
+
+        // ----- Registro de rostro desde este celular -----
+        let capturaActual = null;     // captura en curso que informa el servidor
+        let capturaTimer = null;
+        let enviandoCaptura = false;
+        const CAPTURA_ANCHO = 480;    // imagen más grande para el registro (mejor calidad)
+
+        function gestionarCapturaCelular(captura) {
+            const guia = document.getElementById('guia-captura');
+            capturaActual = captura;
+            if (!captura) {
+                guia.style.display = 'none';
+                if (capturaTimer) { clearInterval(capturaTimer); capturaTimer = null; }
+                return;
+            }
+            guia.style.display = 'block';
+            if (captura.origen !== 'celular') {
+                guia.innerText = `Registro de rostro de ${captura.nombre} desde la computadora...`;
+                if (capturaTimer) { clearInterval(capturaTimer); capturaTimer = null; }
+                return;
+            }
+            if (!capturaTimer) {
+                guia.innerText = `Registrando rostro de ${captura.nombre}: ${captura.tomadas}/${captura.meta}`;
+                capturaTimer = setInterval(enviarFrameCaptura, 500);
+            }
+        }
+
+        async function enviarFrameCaptura() {
+            const video = document.getElementById('webcam');
+            const guia = document.getElementById('guia-captura');
+            if (enviandoCaptura || !capturaActual || !video.videoWidth) return;
+            const escala = CAPTURA_ANCHO / video.videoWidth;
+            const canvas = document.createElement('canvas');
+            canvas.width = CAPTURA_ANCHO;
+            canvas.height = Math.round(video.videoHeight * escala);
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            enviandoCaptura = true;
+            try {
+                const r = await fetch('/api/captura/frame', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg', 0.92) })
+                }).then(res => res.json());
+                guia.innerText = r.mensaje || '';
+            } catch (err) {
+                guia.innerText = 'Sin conexión con el servidor. Reintentando...';
+            } finally {
+                enviandoCaptura = false;
+            }
         }
 
         // ----- Reloj -----

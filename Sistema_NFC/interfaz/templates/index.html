@@ -46,9 +46,26 @@
                             <label class="form-check-label" for="chk-rostro">Agregar reconocimiento facial</label>
                         </div>
 
-                        <div id="bloque-camara" class="d-none mb-2">
-                            <video id="cam-admin" autoplay playsinline muted class="w-100 rounded bg-black" style="max-height: 220px;"></video>
-                            <button class="btn btn-info btn-sm w-100 mt-2" onclick="capturarRostroAhora()">📸 Capturar rostro ahora</button>
+                        <div id="bloque-camara" class="d-none mb-2 border rounded p-2">
+                            <label class="small mb-1">Cámara para el rostro</label>
+                            <select id="sel-origen" class="form-select form-select-sm mb-2" onchange="cambioOrigen()">
+                                <option value="computadora">💻 Cámara de esta computadora</option>
+                                <option value="celular">📱 Cámara del celular (terminal)</option>
+                            </select>
+                            <div id="fila-camara">
+                                <select id="sel-camara" class="form-select form-select-sm mb-2" onchange="cambiarCamara()"></select>
+                            </div>
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" id="chk-centrar" checked>
+                                <label class="form-check-label small" for="chk-centrar">Pedir centrar el rostro (guía en pantalla)</label>
+                            </div>
+                            <div style="position: relative;">
+                                <video id="cam-admin" autoplay playsinline muted class="w-100 rounded bg-black" style="max-height: 220px;"></video>
+                                <div style="position:absolute; top:10%; left:30%; width:40%; height:80%; border:2px dashed #0f0; border-radius:50%; pointer-events:none;"></div>
+                            </div>
+                            <div id="guia-admin" class="small text-info mt-1">Elige la cámara y presiona Iniciar captura.</div>
+                            <button class="btn btn-info btn-sm w-100 mt-2" onclick="iniciarCapturaAdmin()">📸 Iniciar captura (3 fotos)</button>
+                            <button class="btn btn-outline-danger btn-sm w-100 mt-1" onclick="cancelarCaptura()">⏹ Cancelar captura</button>
                         </div>
 
                         <button class="btn btn-success w-100 fw-bold" onclick="guardarRegistro()">💾 Guardar</button>
@@ -216,7 +233,7 @@
         function conectarTiempoReal() {
             const fuente = new EventSource('/api/stream');
             fuente.onopen = () => marcarConexion(true);
-            fuente.onmessage = (ev) => { marcarConexion(true); renderizar(JSON.parse(ev.data)); };
+            fuente.onmessage = (ev) => { const datos = JSON.parse(ev.data); marcarConexion(true); renderizar(datos); gestionarCapturaAdmin(datos.captura || null); };
             fuente.onerror = () => marcarConexion(false);
         }
 
@@ -280,39 +297,110 @@
         }
 
         // ----- Rostro: cámara del computador -----
+        // ----- Cámara y captura de rostro -----
+        let capturaAdminTimer = null;
+        let enviandoFrameAdmin = false;
+        let capturaAdminVista = false;
+
         function cambioRostro() {
             const marcado = document.getElementById('chk-rostro').checked;
             document.getElementById('bloque-camara').classList.toggle('d-none', !marcado);
-            if (marcado && !streamAdmin) iniciarCamaraAdmin();
+            if (marcado) cambioOrigen();
         }
 
-        async function iniciarCamaraAdmin() {
+        function cambioOrigen() {
+            const esComputadora = document.getElementById('sel-origen').value === 'computadora';
+            document.getElementById('fila-camara').classList.toggle('d-none', !esComputadora);
+            if (esComputadora) llenarCamaras();
+            else if (streamAdmin) { streamAdmin.getTracks().forEach(t => t.stop()); streamAdmin = null; }
+        }
+
+        async function llenarCamaras() {
             try {
-                streamAdmin = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
-                document.getElementById('cam-admin').srcObject = streamAdmin;
+                if (!streamAdmin) await iniciarCamaraAdmin();
+                const todas = await navigator.mediaDevices.enumerateDevices();
+                const camaras = todas.filter(d => d.kind === 'videoinput');
+                document.getElementById('sel-camara').innerHTML = camaras.map((d, i) =>
+                    `<option value="${escapar(d.deviceId)}">${escapar(d.label || 'Cámara ' + (i + 1))}</option>`).join('');
             } catch (err) {
-                mostrarMensaje('msg-usuario', false, `No se pudo abrir la cámara (${err.name})`);
+                mostrarMensaje('msg-usuario', false, `No se pudo listar las cámaras (${err.name})`);
             }
         }
 
-        function capturarFrame() {
-            const video = document.getElementById('cam-admin');
-            if (!video.videoWidth) return null;
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
-            return canvas.toDataURL('image/jpeg');
+        async function iniciarCamaraAdmin(deviceId) {
+            if (streamAdmin) streamAdmin.getTracks().forEach(t => t.stop());
+            const video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' };
+            streamAdmin = await navigator.mediaDevices.getUserMedia({ video: video, audio: false });
+            document.getElementById('cam-admin').srcObject = streamAdmin;
         }
 
-        async function capturarRostroAhora() {
-            const uid = document.getElementById('input-uid').value.trim().toUpperCase();
-            if (!uid) return mostrarMensaje('msg-usuario', false, 'Primero escanea o escribe la tarjeta del usuario');
-            const img = capturarFrame();
-            if (!img) return mostrarMensaje('msg-usuario', false, 'La cámara no está activa');
-            const r = await post('/api/usuario/foto', { uid, imagen: img });
+        function cambiarCamara() {
+            const id = document.getElementById('sel-camara').value;
+            iniciarCamaraAdmin(id).catch(err => mostrarMensaje('msg-usuario', false, `No se pudo abrir la cámara (${err.name})`));
+        }
+
+        function capturarFrame(anchoMaximo) {
+            const video = document.getElementById('cam-admin');
+            if (!video.videoWidth) return null;
+            const escala = Math.min(1, (anchoMaximo || video.videoWidth) / video.videoWidth);
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(video.videoWidth * escala);
+            canvas.height = Math.round(video.videoHeight * escala);
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', 0.92);
+        }
+
+        function usuarioParaRostro() {
+            const tarjeta = document.getElementById('input-uid').value.trim().toUpperCase();
+            return usuarioSeleccionado || tarjeta;
+        }
+
+        async function iniciarCapturaAdmin(uidForzado) {
+            const uid = uidForzado || usuarioParaRostro();
+            if (!uid) return mostrarMensaje('msg-usuario', false, 'Selecciona un usuario de la lista o escribe su tarjeta');
+            const origen = document.getElementById('sel-origen').value;
+            if (origen === 'computadora' && !streamAdmin) return mostrarMensaje('msg-usuario', false, 'Activa la cámara de la computadora');
+            const centrar = document.getElementById('chk-centrar').checked;
+            const r = await post('/api/captura/iniciar', { uid, origen, centrar });
             mostrarMensaje('msg-usuario', r.success, r.mensaje);
-            refrescar();
+            return r;
+        }
+
+        async function cancelarCaptura() {
+            const r = await post('/api/captura/cancelar', {});
+            mostrarMensaje('msg-usuario', r.success, r.mensaje);
+        }
+
+        // Se llama con cada estado que llega del servidor
+        function gestionarCapturaAdmin(captura) {
+            const guia = document.getElementById('guia-admin');
+            if (!captura) {
+                if (capturaAdminTimer) { clearInterval(capturaAdminTimer); capturaAdminTimer = null; }
+                if (capturaAdminVista) guia.innerText = '✅ Captura terminada o cancelada';
+                capturaAdminVista = false;
+                return;
+            }
+            capturaAdminVista = true;
+            if (captura.origen !== 'computadora') {
+                if (capturaAdminTimer) { clearInterval(capturaAdminTimer); capturaAdminTimer = null; }
+                guia.innerText = `Registrando a ${captura.nombre} desde el celular: ${captura.tomadas}/${captura.meta}`;
+                return;
+            }
+            guia.innerText = `Registrando a ${captura.nombre}: ${captura.tomadas}/${captura.meta}`;
+            if (!capturaAdminTimer) capturaAdminTimer = setInterval(enviarFrameAdmin, 500);
+        }
+
+        async function enviarFrameAdmin() {
+            if (enviandoFrameAdmin) return;
+            const img = capturarFrame(800);
+            if (!img) return;
+            enviandoFrameAdmin = true;
+            try {
+                const r = await post('/api/captura/frame', { imagen: img });
+                document.getElementById('guia-admin').innerText = r.mensaje || '';
+            } finally {
+                enviandoFrameAdmin = false;
+            }
         }
 
         // ----- Guardar: tarjeta, rostro o ambos -----
@@ -332,26 +420,27 @@
                 if (!usuarioSeleccionado) return mostrarMensaje('msg-usuario', false, 'Para agregar solo rostro, primero haz clic en un usuario de la lista');
                 uidFinal = usuarioSeleccionado;
             }
-            if (quiereRostro && !streamAdmin) return mostrarMensaje('msg-usuario', false, 'Activa la cámara para capturar el rostro');
+            if (quiereRostro && document.getElementById('sel-origen').value === 'computadora' && !streamAdmin) {
+                return mostrarMensaje('msg-usuario', false, 'Activa la cámara de la computadora para capturar el rostro');
+            }
 
             // 1) Tarjeta y nombre
             if (quiereTarjeta) {
                 const r = await post('/api/usuario/guardar', { uid, nombre });
                 if (!r.success) return mostrarMensaje('msg-usuario', false, r.mensaje);
             }
-            // 2) Rostro (se toma justo al guardar)
+            // 2) Rostro: inicia la captura (3 fotos, con control de calidad y guía)
             let mensajes = [];
             if (quiereTarjeta) mensajes.push(`Usuario ${nombre} guardado`);
             if (quiereRostro) {
-                const img = capturarFrame();
-                const r = await post('/api/usuario/foto', { uid: uidFinal, imagen: img });
-                if (!r.success) return mostrarMensaje('msg-usuario', false, r.mensaje);
-                mensajes.push('rostro guardado');
+                const r = await iniciarCapturaAdmin(uidFinal);
+                if (!r || !r.success) return;
+                mensajes.push('captura de rostro iniciada');
+                document.getElementById('chk-rostro').checked = false;
+                document.getElementById('bloque-camara').classList.add('d-none');
             }
             mostrarMensaje('msg-usuario', true, '✅ ' + mensajes.join(' y '));
             usuarioSeleccionado = uidFinal;
-            document.getElementById('chk-rostro').checked = false;
-            cambioRostro();
             refrescar();
         }
 
