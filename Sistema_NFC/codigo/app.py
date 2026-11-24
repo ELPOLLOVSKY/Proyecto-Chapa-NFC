@@ -634,6 +634,30 @@ def captura_resumen():
         return {k: _captura[k] for k in ("uid", "nombre", "origen", "centrar", "tomadas", "meta")}
 
 
+# Vista previa de la cámara del celular, para mostrarla en el admin
+_vista_celular = {"imagen": None, "ts": 0.0}
+
+
+@app.route('/api/celular/vista', methods=['POST'])
+def api_celular_vista():
+    """El celular envía una imagen chica de lo que ve su cámara (una por segundo)."""
+    data = request.get_json(silent=True) or {}
+    imagen = data.get('imagen', '')
+    if not imagen.startswith('data:image/jpeg;base64,'):
+        return jsonify({"success": False})
+    _vista_celular["imagen"] = base64.b64decode(imagen.split(',', 1)[1])
+    _vista_celular["ts"] = time.time()
+    return jsonify({"success": True})
+
+
+@app.route('/api/celular/vista')
+def api_celular_vista_ver():
+    """El admin pide la última imagen del celular. Si hace más de 5 s que no llega, 404."""
+    if not _vista_celular["imagen"] or time.time() - _vista_celular["ts"] > 5:
+        return Response(status=404)
+    return Response(_vista_celular["imagen"], mimetype='image/jpeg', headers={"Cache-Control": "no-store"})
+
+
 @app.route('/api/captura/iniciar', methods=['POST'])
 def api_captura_iniciar():
     global _captura
