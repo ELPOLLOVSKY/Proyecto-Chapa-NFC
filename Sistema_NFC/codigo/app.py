@@ -435,6 +435,7 @@ def calcular_estado():
         "latencia_firebase_ms": sync.latencia_ms,
         "pendientes_nube": cola_nube_app.pendientes(),
         "captura": captura_resumen(),
+        "vista_celular": _vista["activa"],
     }
 
 
@@ -634,28 +635,53 @@ def captura_resumen():
         return {k: _captura[k] for k in ("uid", "nombre", "origen", "centrar", "tomadas", "meta")}
 
 
-# Vista previa de la cámara del celular, para mostrarla en el admin
-_vista_celular = {"imagen": None, "ts": 0.0}
+# Transmisión de la cámara del celular hacia el admin (MJPEG)
+_vista = {"imagen": None, "ts": 0.0, "activa": False}
+_vista_cond = threading.Condition()
+
+
+@app.route('/api/celular/vista/activar', methods=['POST'])
+def api_celular_vista_activar():
+    """El admin decide si se transmite la cámara del celular."""
+    data = request.get_json(silent=True) or {}
+    with _vista_cond:
+        _vista["activa"] = bool(data.get('activa'))
+        if not _vista["activa"]:
+            _vista["imagen"] = None
+        _vista_cond.notify_all()
+    return jsonify({"success": True, "activa": _vista["activa"]})
 
 
 @app.route('/api/celular/vista', methods=['POST'])
 def api_celular_vista():
-    """El celular envía una imagen chica de lo que ve su cámara (una por segundo)."""
+    """El celular envía un cuadro chico de su cámara (solo si el admin lo tiene activado)."""
     data = request.get_json(silent=True) or {}
     imagen = data.get('imagen', '')
-    if not imagen.startswith('data:image/jpeg;base64,'):
-        return jsonify({"success": False})
-    _vista_celular["imagen"] = base64.b64decode(imagen.split(',', 1)[1])
-    _vista_celular["ts"] = time.time()
+    if not _vista["activa"] or not imagen.startswith('data:image/jpeg;base64,'):
+        return jsonify({"success": False, "activa": _vista["activa"]})
+    with _vista_cond:
+        _vista["imagen"] = base64.b64decode(imagen.split(',', 1)[1])
+        _vista["ts"] = time.time()
+        _vista_cond.notify_all()
     return jsonify({"success": True})
 
 
-@app.route('/api/celular/vista')
-def api_celular_vista_ver():
-    """El admin pide la última imagen del celular. Si hace más de 5 s que no llega, 404."""
-    if not _vista_celular["imagen"] or time.time() - _vista_celular["ts"] > 5:
-        return Response(status=404)
-    return Response(_vista_celular["imagen"], mimetype='image/jpeg', headers={"Cache-Control": "no-store"})
+@app.route('/api/celular/vista/stream')
+def api_celular_vista_stream():
+    """Transmisión continua: cada cuadro nuevo del celular se envía al admin."""
+    def generar():
+        ultimo = None
+        while True:
+            with _vista_cond:
+                _vista_cond.wait_for(lambda: _vista["activa"] and _vista["imagen"] is not None
+                                     and _vista["ts"] != ultimo, timeout=5)
+                if not _vista["activa"] or _vista["imagen"] is None or _vista["ts"] == ultimo:
+                    return  # sin cuadros nuevos (o desactivada): se corta la transmisión
+                img, ultimo = _vista["imagen"], _vista["ts"]
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '
+                   + str(len(img)).encode() + b'\r\n\r\n' + img + b'\r\n')
+    return Response(generar(), mimetype='multipart/x-mixed-replace; boundary=frame',
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.route('/api/captura/iniciar', methods=['POST'])

@@ -213,6 +213,15 @@
 
         function renderizarEstado(data) {
             gestionarCapturaCelular(data.captura || null);
+            gestionarVistaCelular(data.vista_celular);
+            if (data.captura) {
+                // Durante el registro de rostro no se muestra ningún resultado ni banner encima de la cámara
+                mostrandoAcceso = false;
+                ocultarAcceso();
+                document.getElementById('banner-estado').style.display = 'none';
+                return;
+            }
+            document.getElementById('banner-estado').style.display = '';
             const u = data.ultimo;
             const reciente = u && u.hace_segundos < MOSTRAR_EVENTO_SEGUNDOS;
             mostrandoAcceso = Boolean(reciente);
@@ -308,10 +317,12 @@
             capturaActual = captura;
             if (!captura) {
                 guia.style.display = 'none';
+                document.getElementById('escaneo').style.display = '';
                 if (capturaTimer) { clearInterval(capturaTimer); capturaTimer = null; }
                 return;
             }
             guia.style.display = 'block';
+            document.getElementById('escaneo').style.display = 'none';
             if (captura.origen !== 'celular') {
                 guia.innerText = `Registro de rostro de ${captura.nombre} desde la computadora...`;
                 if (capturaTimer) { clearInterval(capturaTimer); capturaTimer = null; }
@@ -347,8 +358,14 @@
             }
         }
 
-        // ----- Vista previa para el admin: una imagen chica por segundo -----
+        // ----- Transmisión de la cámara hacia el admin (solo si el admin la activó) -----
+        let vistaCelularActiva = false;
         let enviandoVista = false;
+
+        function gestionarVistaCelular(activa) {
+            vistaCelularActiva = Boolean(activa);
+        }
+
         async function enviarVistaCelular() {
             const video = document.getElementById('webcam');
             if (enviandoVista || !video.videoWidth) return;
@@ -361,15 +378,21 @@
                 await fetch('/api/celular/vista', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg', 0.6) })
+                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg', 0.5) })
                 });
             } catch (err) {
-                // sin conexión: se reintenta en el siguiente segundo
+                // sin conexión: se reintenta en el siguiente cuadro
             } finally {
                 enviandoVista = false;
             }
         }
-        setInterval(enviarVistaCelular, 1000);
+
+        // Envía cuadros mientras el admin lo tenga activado (hasta ~8 por segundo según la red)
+        async function bucleVistaCelular() {
+            if (vistaCelularActiva) await enviarVistaCelular();
+            setTimeout(bucleVistaCelular, 120);
+        }
+        bucleVistaCelular();
 
         // ----- Reloj -----
         function actualizarReloj() {
