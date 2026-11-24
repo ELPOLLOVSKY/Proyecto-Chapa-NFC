@@ -140,6 +140,10 @@
         let usuarioSeleccionado = null;   // uid de un usuario existente elegido en la lista
         let ultimosUsuarios = {};
         let ultimasFotos = {};
+        // Ruta de una foto dentro de rostros_usuarios (p. ej. 'UID/foto_123.jpg')
+        function rutaFoto(relativa) {
+            return '/rostros_usuarios/' + relativa.split('/').map(encodeURIComponent).join('/');
+        }
 
         function escapar(texto) {
             const div = document.createElement('div');
@@ -182,7 +186,7 @@
                 ultimosUsuarios[uid] = nombre;
                 const clase = uid === usuarioSeleccionado ? ' class="seleccionada"' : '';
                 return `<tr data-uid="${escapar(uid)}"${clase}><td>${escapar(nombre)}</td><td><code>${escapar(uid)}</code></td>` +
-                       `<td>${ultimasFotos[uid] ? `<img class="foto-clic rounded-circle" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}" src="/rostros_usuarios/${encodeURIComponent(ultimasFotos[uid])}" width="32" height="32" style="object-fit:cover" onerror="this.outerHTML='<span class=&quot;foto-clic text-secondary&quot; data-uid=&quot;${escapar(uid)}&quot; data-nombre=&quot;${escapar(nombre)}&quot;>sin foto</span>'">` : `<span class="foto-clic text-secondary" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}">sin foto</span>`}</td>` +
+                       `<td>${ultimasFotos[uid] ? `<img class="foto-clic rounded-circle" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}" src="${rutaFoto(ultimasFotos[uid])}" width="32" height="32" style="object-fit:cover" onerror="this.outerHTML='<span class=&quot;foto-clic text-secondary&quot; data-uid=&quot;${escapar(uid)}&quot; data-nombre=&quot;${escapar(nombre)}&quot;>sin foto</span>'">` : `<span class="foto-clic text-secondary" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}">sin foto</span>`}</td>` +
                        `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="event.stopPropagation(); eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
             }).join('');
         }
@@ -221,7 +225,7 @@
             img.onerror = () => { img.style.display = 'none'; sin.classList.remove('d-none'); };
             img.onload = () => { img.style.display = ''; sin.classList.add('d-none'); };
             if (!ultimasFotos[uid]) { img.removeAttribute('src'); img.style.display = 'none'; sin.classList.remove('d-none'); }
-            else img.src = `/rostros_usuarios/${encodeURIComponent(ultimasFotos[uid])}`;
+            else img.src = rutaFoto(ultimasFotos[uid]);
             document.getElementById('modal-foto').classList.add('visible');
         }
 

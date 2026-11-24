@@ -3,6 +3,7 @@ import serial.tools.list_ports
 import time
 from datetime import datetime
 import os
+import shutil
 import csv
 import json
 import msvcrt
@@ -757,19 +758,8 @@ def eliminar_usuario_con_confirmacion(ser):
         if confirmar == 's':
             del usuarios_dict[uid_a_eliminar]
             guardar_usuarios_locales(usuarios_dict)
-            # Se borran todas las fotos del usuario: UID.jpg y UID_*.jpg
-            carpeta_fotos = os.path.join(DATOS_DIR, "rostros_usuarios")
-            fotos = [os.path.join(carpeta_fotos, f"{uid_a_eliminar}.jpg")]
-            if os.path.isdir(carpeta_fotos):
-                fotos += [os.path.join(carpeta_fotos, n) for n in os.listdir(carpeta_fotos)
-                          if n.startswith(f"{uid_a_eliminar}_") and n.lower().endswith(".jpg")]
-            for foto in fotos:
-                if not os.path.exists(foto):
-                    continue
-                try:
-                    os.remove(foto)
-                except OSError:
-                    pass
+            # Se borra la carpeta de fotos de ese usuario (rostros_usuarios/<UID>/)
+            shutil.rmtree(os.path.join(DATOS_DIR, "rostros_usuarios", uid_a_eliminar), ignore_errors=True)
             if online:
                 try:
                     requests.delete(f"{URL_BASE}/usuarios/{uid_a_eliminar}.json", timeout=3)
