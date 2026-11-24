@@ -139,6 +139,7 @@
         let streamAdmin = null;
         let usuarioSeleccionado = null;   // uid de un usuario existente elegido en la lista
         let ultimosUsuarios = {};
+        let ultimasFotos = {};
 
         function escapar(texto) {
             const div = document.createElement('div');
@@ -174,13 +175,14 @@
             }).join('');
 
             ultimosUsuarios = {};
+            ultimasFotos = data.fotos || {};
             const tusers = document.getElementById('tabla-usuarios');
             tusers.innerHTML = Object.entries(data.usuarios).map(([uid, valor]) => {
                 const nombre = typeof valor === 'object' ? valor.nombre : valor;
                 ultimosUsuarios[uid] = nombre;
                 const clase = uid === usuarioSeleccionado ? ' class="seleccionada"' : '';
                 return `<tr data-uid="${escapar(uid)}"${clase}><td>${escapar(nombre)}</td><td><code>${escapar(uid)}</code></td>` +
-                       `<td><img class="foto-clic rounded-circle" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}" src="/rostros_usuarios/${escapar(uid)}.jpg" width="32" height="32" style="object-fit:cover" onerror="this.outerHTML='<span class=&quot;foto-clic text-secondary&quot; data-uid=&quot;${escapar(uid)}&quot; data-nombre=&quot;${escapar(nombre)}&quot;>sin foto</span>'"></td>` +
+                       `<td>${ultimasFotos[uid] ? `<img class="foto-clic rounded-circle" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}" src="/rostros_usuarios/${encodeURIComponent(ultimasFotos[uid])}" width="32" height="32" style="object-fit:cover" onerror="this.outerHTML='<span class=&quot;foto-clic text-secondary&quot; data-uid=&quot;${escapar(uid)}&quot; data-nombre=&quot;${escapar(nombre)}&quot;>sin foto</span>'">` : `<span class="foto-clic text-secondary" data-uid="${escapar(uid)}" data-nombre="${escapar(nombre)}">sin foto</span>`}</td>` +
                        `<td><button class="btn btn-danger btn-sm py-0 px-2" onclick="event.stopPropagation(); eliminarUsuario('${escapar(uid)}')">X</button></td></tr>`;
             }).join('');
         }
@@ -218,7 +220,8 @@
             const sin = document.getElementById('modal-sin');
             img.onerror = () => { img.style.display = 'none'; sin.classList.remove('d-none'); };
             img.onload = () => { img.style.display = ''; sin.classList.add('d-none'); };
-            img.src = `/rostros_usuarios/${encodeURIComponent(uid)}.jpg?t=${Date.now()}`;
+            if (!ultimasFotos[uid]) { img.removeAttribute('src'); img.style.display = 'none'; sin.classList.remove('d-none'); }
+            else img.src = `/rostros_usuarios/${encodeURIComponent(ultimasFotos[uid])}`;
             document.getElementById('modal-foto').classList.add('visible');
         }
 

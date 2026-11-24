@@ -426,6 +426,7 @@ def calcular_estado():
 
     return {
         "usuarios": usuarios,
+        "fotos": {uid: (os.path.basename(f[-1]) if (f := fotos_de(uid)) else None) for uid in usuarios},
         "logs": logs[-15:][::-1],
         "ultimo": ultimo,
         "chapa_abierta": chapa_abierta,
