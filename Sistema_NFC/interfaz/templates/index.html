@@ -59,6 +59,10 @@
                                 <input class="form-check-input" type="checkbox" id="chk-centrar" checked>
                                 <label class="form-check-label small" for="chk-centrar">Pedir centrar el rostro (guía en pantalla)</label>
                             </div>
+                            <div id="fila-vista-celular" class="form-check mb-2 d-none">
+                                <input class="form-check-input" type="checkbox" id="chk-vista-celular" checked onchange="cambioVistaCelular()">
+                                <label class="form-check-label small" for="chk-vista-celular">Transmitir la cámara del celular (usa red)</label>
+                            </div>
                             <div style="position: relative;">
                                 <video id="cam-admin" autoplay playsinline muted class="w-100 rounded bg-black" style="max-height: 220px;"></video>
                                 <img id="vista-celular" alt="Vista de la cámara del celular" class="w-100 rounded bg-black d-none" style="max-height: 220px; object-fit: contain;">
@@ -310,19 +314,30 @@
             else mostrarVistaCelular(false);
         }
 
-        // Vista previa de la cámara del celular (el celular envía una imagen por segundo)
-        let vistaCelularTimer = null;
-        function mostrarVistaCelular(activa) {
-            document.getElementById('cam-admin').classList.toggle('d-none', activa);
-            document.getElementById('vista-celular').classList.toggle('d-none', !activa);
-            if (activa && !vistaCelularTimer) {
-                const img = document.getElementById('vista-celular');
-                img.onerror = () => { document.getElementById('guia-admin').innerText = 'Sin imagen del celular: abre la página del terminal en el celular'; };
-                vistaCelularTimer = setInterval(() => {
-                    document.getElementById('vista-celular').src = '/api/celular/vista?t=' + Date.now();
-                }, 1000);
+        // Transmisión de la cámara del celular (MJPEG): se activa/desactiva con el check
+        let vistaActivaEnServidor = null;
+        function enviarActivaVista(activa) {
+            if (activa === vistaActivaEnServidor) return;
+            vistaActivaEnServidor = activa;
+            post('/api/celular/vista/activar', { activa: activa });
+        }
+
+        function mostrarVistaCelular(origenCelular) {
+            const transmitir = origenCelular && document.getElementById('chk-vista-celular').checked;
+            const img = document.getElementById('vista-celular');
+            document.getElementById('cam-admin').classList.toggle('d-none', origenCelular);
+            document.getElementById('fila-vista-celular').classList.toggle('d-none', !origenCelular);
+            img.classList.toggle('d-none', !transmitir);
+            if (transmitir) {
+                if (!img.getAttribute('src')) img.src = '/api/celular/vista/stream?t=' + Date.now();
+            } else {
+                img.removeAttribute('src');
             }
-            if (!activa && vistaCelularTimer) { clearInterval(vistaCelularTimer); vistaCelularTimer = null; }
+            enviarActivaVista(transmitir);
+        }
+
+        function cambioVistaCelular() {
+            mostrarVistaCelular(true);
         }
 
         function cambioOrigen() {

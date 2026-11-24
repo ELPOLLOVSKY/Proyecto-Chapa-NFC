@@ -3,3 +3,5 @@ clave_celular.pem
 pendientes_nube_*.json
 pendientes_nube_*.json.tmp
 web_app.log
+__pycache__/
+*.pyc
