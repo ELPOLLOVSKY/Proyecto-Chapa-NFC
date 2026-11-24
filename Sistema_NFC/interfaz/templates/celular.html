@@ -347,6 +347,30 @@
             }
         }
 
+        // ----- Vista previa para el admin: una imagen chica por segundo -----
+        let enviandoVista = false;
+        async function enviarVistaCelular() {
+            const video = document.getElementById('webcam');
+            if (enviandoVista || !video.videoWidth) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = 320;
+            canvas.height = Math.round(video.videoHeight * (320 / video.videoWidth));
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            enviandoVista = true;
+            try {
+                await fetch('/api/celular/vista', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imagen: canvas.toDataURL('image/jpeg', 0.6) })
+                });
+            } catch (err) {
+                // sin conexión: se reintenta en el siguiente segundo
+            } finally {
+                enviandoVista = false;
+            }
+        }
+        setInterval(enviarVistaCelular, 1000);
+
         // ----- Reloj -----
         function actualizarReloj() {
             const ahora = new Date();

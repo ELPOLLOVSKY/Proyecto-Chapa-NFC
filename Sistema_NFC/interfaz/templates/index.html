@@ -61,6 +61,7 @@
                             </div>
                             <div style="position: relative;">
                                 <video id="cam-admin" autoplay playsinline muted class="w-100 rounded bg-black" style="max-height: 220px;"></video>
+                                <img id="vista-celular" alt="Vista de la cámara del celular" class="w-100 rounded bg-black d-none" style="max-height: 220px; object-fit: contain;">
                                 <div style="position:absolute; top:10%; left:30%; width:40%; height:80%; border:2px dashed #0f0; border-radius:50%; pointer-events:none;"></div>
                             </div>
                             <div id="guia-admin" class="small text-info mt-1">Elige la cámara y presiona Iniciar captura.</div>
@@ -306,11 +307,28 @@
             const marcado = document.getElementById('chk-rostro').checked;
             document.getElementById('bloque-camara').classList.toggle('d-none', !marcado);
             if (marcado) cambioOrigen();
+            else mostrarVistaCelular(false);
+        }
+
+        // Vista previa de la cámara del celular (el celular envía una imagen por segundo)
+        let vistaCelularTimer = null;
+        function mostrarVistaCelular(activa) {
+            document.getElementById('cam-admin').classList.toggle('d-none', activa);
+            document.getElementById('vista-celular').classList.toggle('d-none', !activa);
+            if (activa && !vistaCelularTimer) {
+                const img = document.getElementById('vista-celular');
+                img.onerror = () => { document.getElementById('guia-admin').innerText = 'Sin imagen del celular: abre la página del terminal en el celular'; };
+                vistaCelularTimer = setInterval(() => {
+                    document.getElementById('vista-celular').src = '/api/celular/vista?t=' + Date.now();
+                }, 1000);
+            }
+            if (!activa && vistaCelularTimer) { clearInterval(vistaCelularTimer); vistaCelularTimer = null; }
         }
 
         function cambioOrigen() {
             const esComputadora = document.getElementById('sel-origen').value === 'computadora';
             document.getElementById('fila-camara').classList.toggle('d-none', !esComputadora);
+            mostrarVistaCelular(!esComputadora);
             if (esComputadora) llenarCamaras();
             else if (streamAdmin) { streamAdmin.getTracks().forEach(t => t.stop()); streamAdmin = null; }
         }
