@@ -5,6 +5,7 @@ import json
 import math
 import time
 import base64
+import shutil
 import socket
 import threading
 import traceback
@@ -193,8 +194,9 @@ def nombre_de(valor):
     return str(valor)
 
 
-def ruta_foto(uid):
-    return os.path.join(CARPETA_ROSTROS, f"{uid}.jpg")
+def carpeta_usuario(uid):
+    """Cada persona tiene su propia carpeta de fotos: rostros_usuarios/<UID>/."""
+    return os.path.join(CARPETA_ROSTROS, uid)
 
 
 def sincronizar_firebase(metodo, ruta, cuerpo=None):
@@ -295,19 +297,43 @@ def decodificar_imagen(data_url):
 
 
 def fotos_de(uid):
-    """Todas las fotos de un usuario (cada una es una plantilla de rostro)."""
-    if not os.path.isdir(CARPETA_ROSTROS):
+    """Todas las fotos de un usuario (cada una es una plantilla de rostro), solo de su carpeta."""
+    carpeta = carpeta_usuario(uid) if uid else ""
+    if not carpeta or not os.path.isdir(carpeta):
         return []
-    encontradas = []
-    for nombre in os.listdir(CARPETA_ROSTROS):
-        base, ext = os.path.splitext(nombre)
-        if ext.lower() == ".jpg" and (base == uid or base.startswith(uid + "_")):
-            encontradas.append(os.path.join(CARPETA_ROSTROS, nombre))
-    return sorted(encontradas)
+    return sorted(os.path.join(carpeta, n) for n in os.listdir(carpeta) if n.lower().endswith(".jpg"))
 
 
 def nueva_foto_path(uid):
-    return os.path.join(CARPETA_ROSTROS, f"{uid}_{int(time.time() * 1000)}.jpg")
+    carpeta = carpeta_usuario(uid)
+    os.makedirs(carpeta, exist_ok=True)
+    return os.path.join(carpeta, f"foto_{int(time.time() * 1000)}.jpg")
+
+
+def ruta_relativa_foto(ruta):
+    """Ruta dentro de rostros_usuarios, p. ej. '04AB12CD/foto_1700000000000.jpg'."""
+    return os.path.relpath(ruta, CARPETA_ROSTROS).replace(os.sep, "/")
+
+
+def organizar_fotos_antiguas():
+    """Mueve las fotos del formato anterior (UID.jpg y UID_<ts>.jpg, todas en la misma
+    carpeta) a la carpeta de cada usuario. Se ejecuta al iniciar."""
+    if not os.path.isdir(CARPETA_ROSTROS):
+        return
+    usuarios = cargar_usuarios_locales()
+    for nombre in os.listdir(CARPETA_ROSTROS):
+        ruta = os.path.join(CARPETA_ROSTROS, nombre)
+        if not os.path.isfile(ruta) or not nombre.lower().endswith(".jpg"):
+            continue
+        uid, _, marca = nombre[:-4].partition("_")
+        if uid not in usuarios or (marca and not marca.isdigit()):
+            continue
+        destino = carpeta_usuario(uid)
+        os.makedirs(destino, exist_ok=True)
+        os.replace(ruta, os.path.join(destino, f"foto_{marca or 0}.jpg"))
+
+
+organizar_fotos_antiguas()
 
 
 def normalizar_luz(imagen):
@@ -370,6 +396,15 @@ def similitud(rasgos_a, rasgos_b):
     return _reconocedor.match(rasgos_a, rasgos_b, cv2.FaceRecognizerSF_FR_COSINE)
 
 
+def misma_persona_que_fotos(uid, rasgos):
+    """Evita guardar la cara de otra persona bajo una tarjeta: la foto nueva debe parecerse
+    a las que ya tiene el usuario. Si todavía no tiene fotos, se acepta."""
+    existentes = rasgos_de_usuario(uid)
+    if not existentes:
+        return True
+    return max(float(similitud(rasgos, r)) for r in existentes) >= UMBRAL_SIMILITUD
+
+
 def identificar(rasgos_vivo, usuarios):
     """Compara con todas las fotos de cada usuario (se toma la mejor de cada uno).
     Devuelve (uid, similitud, segunda_similitud, decision).
@@ -408,7 +443,7 @@ def calcular_estado():
         uid = u.get("uid", "")
         ts = int(u.get("timestamp") or 0)
         fotos_usuario = fotos_de(uid) if uid else []
-        foto_url = f"/rostros_usuarios/{os.path.basename(fotos_usuario[-1])}" if fotos_usuario else None
+        foto_url = f"/rostros_usuarios/{ruta_relativa_foto(fotos_usuario[-1])}" if fotos_usuario else None
         ultimo = {
             "fecha_hora": u.get("fecha_hora", ""),
             "uid": uid,
@@ -426,7 +461,7 @@ def calcular_estado():
 
     return {
         "usuarios": usuarios,
-        "fotos": {uid: (os.path.basename(f[-1]) if (f := fotos_de(uid)) else None) for uid in usuarios},
+        "fotos": {uid: (ruta_relativa_foto(f[-1]) if (f := fotos_de(uid)) else None) for uid in usuarios},
         "logs": logs[-15:][::-1],
         "ultimo": ultimo,
         "chapa_abierta": chapa_abierta,
@@ -610,6 +645,9 @@ def api_usuario_foto():
         analisis = analizar_rostro(imagen)
         if analisis["estado"] != "ok":
             return jsonify({"success": False, "mensaje": MENSAJES_CALIDAD.get(analisis["estado"], "Sin rostro")})
+        if not misma_persona_que_fotos(uid, analisis["rasgos"]):
+            return jsonify({"success": False, "mensaje": "Esta cara no coincide con las fotos guardadas de este usuario. "
+                                                         "Si es otra persona, usa su propia tarjeta."})
         cv2.imwrite(nueva_foto_path(uid), imagen)
         return jsonify({"success": True, "mensaje": "✅ Rostro guardado para este usuario"})
     except RuntimeError as e:
@@ -731,6 +769,14 @@ def api_captura_frame():
             return jsonify({"success": False, "guia": analisis["estado"],
                             "mensaje": MENSAJES_CALIDAD.get(analisis["estado"], "Sin rostro")})
 
+        if not misma_persona_que_fotos(cap["uid"], analisis["rasgos"]):
+            with _bloqueo_captura:
+                if _captura and _captura["uid"] == cap["uid"]:
+                    _captura = None
+            return jsonify({"success": False, "guia": "error", "completada": False,
+                            "mensaje": "Esta cara no coincide con las fotos guardadas de este usuario. "
+                                       "Captura cancelada: si es otra persona, usa su propia tarjeta."})
+
         if cap["centrar"]:
             x, y, w, h = analisis["caja"]
             ancho, alto = analisis["ancho_imagen"], analisis["alto_imagen"]
@@ -797,8 +843,7 @@ def api_usuario_eliminar():
 
     del usuarios[uid]
     guardar_usuarios_locales(usuarios)
-    for ruta in fotos_de(uid):
-        os.remove(ruta)
+    shutil.rmtree(carpeta_usuario(uid), ignore_errors=True)
     sincronizar_firebase("DELETE", f"/usuarios/{uid}.json")
     return jsonify({"success": True, "mensaje": "Usuario eliminado"})
 
