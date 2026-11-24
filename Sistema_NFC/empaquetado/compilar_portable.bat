@@ -1,11 +1,12 @@
 @echo off
+cd /d "%~dp0..\codigo"
 title Compilador de Proyecto NFC a Portable (.exe)
 echo =========================================================
 echo   COMPILANDO INTERFAZ GRAFICA PORTABLE CON 3 SCRIPTS
 echo =========================================================
 echo.
 
-pyinstaller --noconfirm --onedir --windowed --name "ControlAccesoNFC_Portable" --add-data "generar_analytics_firebase.py;." --add-data "Proyecto Chapa NFC.py;." interfaz_gui_nfc.py
+pyinstaller --noconfirm --onedir --windowed --distpath "%~dp0dist" --workpath "%~dp0build" --specpath "%~dp0" --name "ControlAccesoNFC_Portable" --add-data "generar_analytics_firebase.py;." --add-data "Proyecto Chapa NFC.py;." interfaz_gui_nfc.py
 
 echo.
 echo =========================================================

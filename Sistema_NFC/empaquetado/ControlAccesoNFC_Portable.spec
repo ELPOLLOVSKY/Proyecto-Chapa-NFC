@@ -5,7 +5,7 @@ a = Analysis(
     ['interfaz_gui_nfc.py'],
     pathex=[],
     binaries=[],
-    datas=[('generar_analytics_firebase.py', '.'), ('Proyecto Chapa NFC.py', '.')],
+    datas=[('../codigo/generar_analytics_firebase.py', '.'), ('../codigo/Proyecto Chapa NFC.py', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

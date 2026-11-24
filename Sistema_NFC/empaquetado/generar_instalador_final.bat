@@ -3,7 +3,7 @@ title Generador del Instalador Unico .EXE - Control NFC
 color 0A
 
 :: Esto asegura que la consola no se pierda en System32, ¡obligatorio!
-cd /d "%~dp0"
+cd /d "%~dp0..\codigo"
 
 echo ====================================================================
 echo    PASO 1: VERIFICANDO E INSTALANDO DEPENDENCIAS EN PYTHON
@@ -26,7 +26,7 @@ echo ====================================================================
 echo.
 
 :: Nota: Compilamos "--console" para que muestre la terminal negra del motor principal
-python -m PyInstaller --noconfirm --onedir --console --name "Motor_Chapa_NFC" --add-data "generar_analytics_firebase.py;." --add-data "app.py;." --add-data "templates;templates" "Proyecto Chapa NFC.py"
+python -m PyInstaller --noconfirm --onedir --console --name "Motor_Chapa_NFC" --add-data "generar_analytics_firebase.py;." --add-data "app.py;." --add-data "..\interfaz\templates;templates" --distpath "%~dp0dist" --workpath "%~dp0build" --specpath "%~dp0" "Proyecto Chapa NFC.py"
 
 if %errorlevel% neq 0 (
     echo ⚠️ Reintentando compilacion forzada...

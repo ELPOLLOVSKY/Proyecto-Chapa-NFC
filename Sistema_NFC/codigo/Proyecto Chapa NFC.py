@@ -30,14 +30,15 @@ def obtener_ruta_base():
         return os.path.dirname(os.path.abspath(__file__))
 
 RUTA_BASE = obtener_ruta_base()
+DATOS_DIR = os.path.join(os.path.dirname(RUTA_BASE), 'datos')  # Sistema_NFC/datos
 
 # Registros de acceso que no llegaron a Firebase (se reenvían al volver la conexión)
-cola_nube_motor = ColaNube(os.path.join(RUTA_BASE, "pendientes_nube_motor.json"), URL_BASE)
+cola_nube_motor = ColaNube(os.path.join(DATOS_DIR, "pendientes_nube_motor.json"), URL_BASE)
 # Cambios de usuarios pendientes en la app web: si existen, no se pisan con los datos de la nube
-RUTA_COLA_APP = os.path.join(RUTA_BASE, "pendientes_nube_app.json")
-ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
-ARCHIVO_JSON_USUARIOS = os.path.join(RUTA_BASE, "usuarios_locales.json")
-ARCHIVO_COLA_DEBUG = os.path.join(RUTA_BASE, "cola_debug.json")
+RUTA_COLA_APP = os.path.join(DATOS_DIR, "pendientes_nube_app.json")
+ARCHIVO_CSV_LOGS = os.path.join(DATOS_DIR, "registros_locales.csv")
+ARCHIVO_JSON_USUARIOS = os.path.join(DATOS_DIR, "usuarios_locales.json")
+ARCHIVO_COLA_DEBUG = os.path.join(DATOS_DIR, "cola_debug.json")
 COMANDOS_DEBUG_PERMITIDOS = {"DBG_START", "DBG_CHAPA_ON", "DBG_CHAPA_OFF", "OK"}
 
 # Variables globales de contadores
@@ -59,7 +60,7 @@ def iniciar_servidor_web_automatico():
         try:
             python_exe = sys.executable.replace("pythonw.exe", "python.exe")
             # Los errores del servidor web se guardan en web_app.log para poder diagnosticarlos
-            log_web = open(os.path.join(RUTA_BASE, "web_app.log"), "a", encoding="utf-8")
+            log_web = open(os.path.join(DATOS_DIR, "web_app.log"), "a", encoding="utf-8")
             log_web.write(f"\n--- Arranque {datetime.now()} ---\n")
             log_web.flush()
             _proceso_web = subprocess.Popen([python_exe, script_web], cwd=RUTA_BASE, stdout=log_web, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
@@ -71,7 +72,7 @@ _fallos_web = 0
 
 def ultimas_lineas_log_web(n=15):
     try:
-        with open(os.path.join(RUTA_BASE, "web_app.log"), encoding="utf-8", errors="ignore") as f:
+        with open(os.path.join(DATOS_DIR, "web_app.log"), encoding="utf-8", errors="ignore") as f:
             return "".join(f.readlines()[-n:])
     except OSError:
         return "(no se pudo leer web_app.log)"
@@ -368,7 +369,7 @@ def ejecutar_cuenta_regresiva_chapa(segundos=3):  # <--- AJUSTADO A 3 SEGUNDOS
         time.sleep(1)
     print("\r🔒 [CHAPA DESACTIVADA] Estado normal restablecido.                    \n")
 
-ARCHIVO_ULTIMA_TARJETA = os.path.join(RUTA_BASE, "ultima_tarjeta.json")
+ARCHIVO_ULTIMA_TARJETA = os.path.join(DATOS_DIR, "ultima_tarjeta.json")
 _ultima_lectura = {"uid": None, "ts": 0.0}
 
 def guardar_ultima_tarjeta(uid):
@@ -756,7 +757,7 @@ def eliminar_usuario_con_confirmacion(ser):
         if confirmar == 's':
             del usuarios_dict[uid_a_eliminar]
             guardar_usuarios_locales(usuarios_dict)
-            foto = os.path.join(RUTA_BASE, "rostros_usuarios", f"{uid_a_eliminar}.jpg")
+            foto = os.path.join(DATOS_DIR, "rostros_usuarios", f"{uid_a_eliminar}.jpg")
             if os.path.exists(foto):
                 try:
                     os.remove(foto)

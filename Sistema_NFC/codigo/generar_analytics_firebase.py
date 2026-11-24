@@ -13,7 +13,8 @@ def obtener_ruta_base():
         return os.path.dirname(os.path.abspath(__file__))
 
 RUTA_BASE = obtener_ruta_base()
-ARCHIVO_CSV_LOGS = os.path.join(RUTA_BASE, "registros_locales.csv")
+DATOS_DIR = os.path.join(os.path.dirname(RUTA_BASE), 'datos')  # Sistema_NFC/datos
+ARCHIVO_CSV_LOGS = os.path.join(DATOS_DIR, "registros_locales.csv")
 
 def generar_reporte_analitico():
     print("\n☁️ Intentando descargar registros de Firebase vía REST...")

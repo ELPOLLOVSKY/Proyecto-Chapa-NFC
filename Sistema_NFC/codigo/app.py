@@ -30,15 +30,18 @@ try:
 except Exception:
     pass
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # Sistema_NFC/codigo
+RAIZ_SISTEMA = os.path.dirname(BASE_DIR)                # Sistema_NFC
+DATOS_DIR = os.path.join(RAIZ_SISTEMA, 'datos')         # usuarios, registros, rostros, certificado
+MODELOS_DIR = os.path.join(RAIZ_SISTEMA, 'modelos')
+app = Flask(__name__, template_folder=os.path.join(RAIZ_SISTEMA, 'interfaz', 'templates'))
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARCHIVO_CSV_LOGS = os.path.join(BASE_DIR, "registros_locales.csv")
-ARCHIVO_JSON_USUARIOS = os.path.join(BASE_DIR, "usuarios_locales.json")
-ARCHIVO_COLA_DEBUG = os.path.join(BASE_DIR, "cola_debug.json")
-ARCHIVO_ULTIMA_TARJETA = os.path.join(BASE_DIR, "ultima_tarjeta.json")
-CARPETA_ROSTROS = os.path.join(BASE_DIR, "rostros_usuarios")
-CARPETA_MODELOS = os.path.join(BASE_DIR, "modelos")
+ARCHIVO_CSV_LOGS = os.path.join(DATOS_DIR, "registros_locales.csv")
+ARCHIVO_JSON_USUARIOS = os.path.join(DATOS_DIR, "usuarios_locales.json")
+ARCHIVO_COLA_DEBUG = os.path.join(DATOS_DIR, "cola_debug.json")
+ARCHIVO_ULTIMA_TARJETA = os.path.join(DATOS_DIR, "ultima_tarjeta.json")
+CARPETA_ROSTROS = os.path.join(DATOS_DIR, "rostros_usuarios")
+CARPETA_MODELOS = MODELOS_DIR
 ARCHIVO_YUNET = os.path.join(CARPETA_MODELOS, "face_detection_yunet_2023mar.onnx")
 ARCHIVO_SFACE = os.path.join(CARPETA_MODELOS, "face_recognition_sface_2021dec.onnx")
 
@@ -57,7 +60,7 @@ sync = Sincronizacion(URL_FIREBASE)
 
 from cola_nube import ColaNube  # noqa: E402
 # Cambios de usuarios hechos sin conexión: se guardan aquí y se suben al volver Firebase
-cola_nube_app = ColaNube(os.path.join(BASE_DIR, "pendientes_nube_app.json"), URL_FIREBASE)
+cola_nube_app = ColaNube(os.path.join(DATOS_DIR, "pendientes_nube_app.json"), URL_FIREBASE)
 
 _detector = None
 _reconocedor = None
@@ -94,7 +97,7 @@ def obtener_ip_local():
     """IP de la red local que usará el celular.
     1) Si existe 'ip_celular.txt' con una IP, se usa esa (sirve para VPN o adaptadores virtuales).
     2) Si no, busca una IP privada en las interfaces (funciona aunque el Wi‑Fi no tenga internet)."""
-    ruta_fija = os.path.join(BASE_DIR, "ip_celular.txt")
+    ruta_fija = os.path.join(DATOS_DIR, "ip_celular.txt")
     if os.path.exists(ruta_fija):
         try:
             with open(ruta_fija, encoding="utf-8") as f:
@@ -602,8 +605,8 @@ PUERTO_HTTPS = 5443  # Para el celular (la cámara exige HTTPS fuera de localhos
 def contexto_ssl_celular():
     """Certificado autofirmado guardado en disco: se crea una sola vez.
     Así el celular no tiene que aceptar una advertencia nueva en cada arranque."""
-    ruta_cert = os.path.join(BASE_DIR, "cert_celular.pem")
-    ruta_clave = os.path.join(BASE_DIR, "clave_celular.pem")
+    ruta_cert = os.path.join(DATOS_DIR, "cert_celular.pem")
+    ruta_clave = os.path.join(DATOS_DIR, "clave_celular.pem")
     try:
         if not (os.path.exists(ruta_cert) and os.path.exists(ruta_clave)):
             import datetime as dt
